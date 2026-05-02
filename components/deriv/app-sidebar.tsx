@@ -22,6 +22,7 @@ import {
   Wallet,
   TrendingUp,
   Bot,
+  Brain,
 } from "lucide-react"
 import { useDerivContext } from "@/contexts/deriv-context"
 
@@ -35,6 +36,11 @@ const navItems = [
     title: "Robos",
     href: "/robots",
     icon: Bot,
+  },
+  {
+    title: "Analise IA",
+    href: "/ai-analysis",
+    icon: Brain,
   },
   {
     title: "Graficos",
