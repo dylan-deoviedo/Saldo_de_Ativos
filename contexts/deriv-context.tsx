@@ -61,6 +61,21 @@ export interface TickData {
   price: number
 }
 
+export interface BuyContractResult {
+  contract_id: number
+  buy_price: number
+  balance_after: number
+  longcode: string
+}
+
+export interface ContractUpdate {
+  contract_id: number
+  status: "open" | "sold" | "won" | "lost"
+  profit: number
+  exit_tick?: number
+  exit_tick_time?: number
+}
+
 interface DerivContextType {
   isConnected: boolean
   isLoading: boolean
@@ -84,6 +99,8 @@ interface DerivContextType {
     count: number,
     granularity?: number
   ) => Promise<OHLCCandle[] | TickData[]>
+  onBuyResult: (callback: (result: BuyContractResult) => void) => () => void
+  onContractUpdate: (callback: (update: ContractUpdate) => void) => () => void
 }
 
 const DerivContext = createContext<DerivContextType | null>(null)
@@ -116,6 +133,8 @@ export function DerivProvider({ children }: DerivProviderProps) {
   const subscriptionIdsRef = useRef<Map<string, string>>(new Map()) // key -> subscription_id
   const pendingRequestsRef = useRef<Map<string, (data: any) => void>>(new Map())
   const reqIdRef = useRef(1)
+  const buyResultCallbacksRef = useRef<Set<(result: BuyContractResult) => void>>(new Set())
+  const contractUpdateCallbacksRef = useRef<Set<(update: ContractUpdate) => void>>(new Set())
 
   const sendRequest = useCallback((request: object) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -270,6 +289,49 @@ export function DerivProvider({ children }: DerivProviderProps) {
               console.log("[v0] OHLC callbacks for key", key, "count:", callbacks?.size || 0)
               if (callbacks) {
                 callbacks.forEach((cb) => cb(candleData))
+              }
+            }
+            break
+
+          case "buy":
+            if (data.buy) {
+              console.log("[v0] Buy contract result:", data.buy)
+              const result: BuyContractResult = {
+                contract_id: data.buy.contract_id,
+                buy_price: data.buy.buy_price,
+                balance_after: data.buy.balance_after,
+                longcode: data.buy.longcode,
+              }
+              buyResultCallbacksRef.current.forEach((cb) => cb(result))
+              
+              // Subscribe to contract updates
+              sendRequest({
+                proposal_open_contract: 1,
+                contract_id: data.buy.contract_id,
+                subscribe: 1,
+              })
+            }
+            break
+
+          case "proposal_open_contract":
+            if (data.proposal_open_contract) {
+              const contract = data.proposal_open_contract
+              console.log("[v0] Contract update:", contract.contract_id, "status:", contract.status)
+              
+              const update: ContractUpdate = {
+                contract_id: contract.contract_id,
+                status: contract.status,
+                profit: contract.profit || 0,
+                exit_tick: contract.exit_tick,
+                exit_tick_time: contract.exit_tick_time,
+              }
+              contractUpdateCallbacksRef.current.forEach((cb) => cb(update))
+
+              // If contract is finished, unsubscribe
+              if (contract.status === "won" || contract.status === "lost" || contract.status === "sold") {
+                if (data.subscription?.id) {
+                  sendRequest({ forget: data.subscription.id })
+                }
               }
             }
             break
@@ -502,6 +564,20 @@ export function DerivProvider({ children }: DerivProviderProps) {
     []
   )
 
+  const onBuyResult = useCallback((callback: (result: BuyContractResult) => void) => {
+    buyResultCallbacksRef.current.add(callback)
+    return () => {
+      buyResultCallbacksRef.current.delete(callback)
+    }
+  }, [])
+
+  const onContractUpdate = useCallback((callback: (update: ContractUpdate) => void) => {
+    contractUpdateCallbacksRef.current.add(callback)
+    return () => {
+      contractUpdateCallbacksRef.current.delete(callback)
+    }
+  }, [])
+
   useEffect(() => {
     return () => {
       if (wsRef.current) {
@@ -533,6 +609,8 @@ export function DerivProvider({ children }: DerivProviderProps) {
         subscribeToTicks,
         subscribeToCandles,
         getTicksHistory,
+        onBuyResult,
+        onContractUpdate,
       }}
     >
       {children}
