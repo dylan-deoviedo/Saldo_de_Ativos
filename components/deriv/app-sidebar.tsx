@@ -21,6 +21,7 @@ import {
   LogOut,
   Wallet,
   TrendingUp,
+  Bot,
 } from "lucide-react"
 import { useDerivContext } from "@/contexts/deriv-context"
 
@@ -31,7 +32,12 @@ const navItems = [
     icon: LayoutDashboard,
   },
   {
-    title: "Gráficos",
+    title: "Robos",
+    href: "/robots",
+    icon: Bot,
+  },
+  {
+    title: "Graficos",
     href: "/charts",
     icon: LineChart,
   },
