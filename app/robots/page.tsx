@@ -1,12 +1,14 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef } from "react"
-import { useDerivContext } from "@/contexts/deriv-context"
+import { useDerivContext, type BuyContractResult, type ContractUpdate } from "@/contexts/deriv-context"
 import { RobotCard } from "@/components/deriv/robot-card"
 import { RobotConfigModal } from "@/components/deriv/robot-config-modal"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
 import {
   Bot,
   TrendingUp,
@@ -15,9 +17,9 @@ import {
   Wallet,
   Target,
   AlertTriangle,
-  Play,
   Square,
-  RotateCcw,
+  MonitorPlay,
+  Zap,
 } from "lucide-react"
 
 export interface RobotStrategy {
@@ -54,6 +56,7 @@ export interface RobotState {
   virtualLossCount: number
   operations: Operation[]
   lastOperation?: Operation
+  pendingContractId?: number
 }
 
 export interface Operation {
@@ -67,7 +70,10 @@ export interface Operation {
   profit?: number
   martingaleLevel: number
   duration: number
+  contractId?: number
 }
+
+export type OperationMode = "demo" | "real"
 
 const strategies: RobotStrategy[] = [
   {
@@ -126,12 +132,14 @@ const defaultConfig: RobotConfig = {
 }
 
 export default function RobotsPage() {
-  const { balance, assets, sendRequest, subscribeToTicks, isConnected } = useDerivContext()
+  const { balance, assets, sendRequest, subscribeToTicks, isConnected, onBuyResult, onContractUpdate } = useDerivContext()
   const [robotStates, setRobotStates] = useState<Record<string, RobotState>>({})
   const [robotConfigs, setRobotConfigs] = useState<Record<string, RobotConfig>>({})
   const [configModalOpen, setConfigModalOpen] = useState(false)
   const [selectedRobot, setSelectedRobot] = useState<string | null>(null)
+  const [operationMode, setOperationMode] = useState<OperationMode>("demo")
   const tickUnsubscribeRef = useRef<Record<string, () => void>>({})
+  const pendingContractsRef = useRef<Map<number, { robotId: string; operationId: string }>>(new Map())
 
   // Initialize robot states
   useEffect(() => {
@@ -186,6 +194,157 @@ export default function RobotsPage() {
     setConfigModalOpen(false)
     setSelectedRobot(null)
   }
+
+  // Buy contract on Deriv (real operation)
+  const buyContract = useCallback(
+    (robotId: string, signal: "CALL" | "PUT", stake: number, config: RobotConfig) => {
+      const contractType = signal === "CALL" ? "CALL" : "PUT"
+      
+      // Convert duration to seconds
+      let durationSeconds = config.duration
+      if (config.durationType === "m") {
+        durationSeconds = config.duration * 60
+      } else if (config.durationType === "h") {
+        durationSeconds = config.duration * 3600
+      }
+
+      // Determine basis duration unit
+      let durationUnit = "s"
+      let duration = durationSeconds
+      if (durationSeconds >= 60 && durationSeconds < 3600) {
+        durationUnit = "m"
+        duration = Math.floor(durationSeconds / 60)
+      } else if (durationSeconds >= 3600) {
+        durationUnit = "h"
+        duration = Math.floor(durationSeconds / 3600)
+      } else if (durationSeconds < 60) {
+        durationUnit = "t"
+        duration = Math.max(5, durationSeconds)
+      }
+
+      const request = {
+        buy: 1,
+        price: stake,
+        parameters: {
+          contract_type: contractType,
+          symbol: config.asset,
+          duration,
+          duration_unit: durationUnit,
+          basis: "stake",
+          amount: stake,
+          currency: "USD",
+        },
+      }
+
+      console.log("[v0] Sending buy request:", JSON.stringify(request))
+      sendRequest(request)
+
+      return request
+    },
+    [sendRequest]
+  )
+
+  // Handle buy results
+  useEffect(() => {
+    if (operationMode !== "real") return
+
+    const unsubscribeBuy = onBuyResult((result: BuyContractResult) => {
+      console.log("[v0] Buy result received:", result)
+      
+      // Find which robot has a pending operation and update it with contract_id
+      setRobotStates((prev) => {
+        const newStates = { ...prev }
+        
+        for (const robotId of Object.keys(newStates)) {
+          const state = newStates[robotId]
+          if (state.isRunning && state.operations.length > 0) {
+            const lastOp = state.operations[state.operations.length - 1]
+            if (lastOp.result === "pending" && !lastOp.contractId) {
+              // Associate contract with this operation
+              pendingContractsRef.current.set(result.contract_id, {
+                robotId,
+                operationId: lastOp.id,
+              })
+              
+              newStates[robotId] = {
+                ...state,
+                operations: state.operations.map((op) =>
+                  op.id === lastOp.id
+                    ? { ...op, contractId: result.contract_id }
+                    : op
+                ),
+              }
+              break
+            }
+          }
+        }
+        
+        return newStates
+      })
+    })
+
+    return () => {
+      unsubscribeBuy()
+    }
+  }, [operationMode, onBuyResult])
+
+  // Handle contract updates
+  useEffect(() => {
+    if (operationMode !== "real") return
+
+    const unsubscribeContract = onContractUpdate((update: ContractUpdate) => {
+      console.log("[v0] Contract update received:", update)
+      
+      const pendingInfo = pendingContractsRef.current.get(update.contract_id)
+      if (!pendingInfo) return
+
+      // Only process finished contracts
+      if (update.status !== "won" && update.status !== "lost") return
+
+      const isWin = update.status === "won"
+      const profit = update.profit
+
+      setRobotStates((prev) => {
+        const state = prev[pendingInfo.robotId]
+        if (!state) return prev
+
+        const config = robotConfigs[pendingInfo.robotId]
+        if (!config) return prev
+
+        const updatedOperations = state.operations.map((op) => {
+          if (op.id === pendingInfo.operationId) {
+            return {
+              ...op,
+              result: isWin ? "win" : "loss" as const,
+              profit: profit,
+            }
+          }
+          return op
+        })
+
+        // Remove from pending
+        pendingContractsRef.current.delete(update.contract_id)
+
+        return {
+          ...prev,
+          [pendingInfo.robotId]: {
+            ...state,
+            wins: isWin ? state.wins + 1 : state.wins,
+            losses: !isWin ? state.losses + 1 : state.losses,
+            profit: state.profit + profit,
+            currentMartingaleLevel: isWin
+              ? 0
+              : Math.min(state.currentMartingaleLevel + 1, config.maxMartingale),
+            operations: updatedOperations,
+          },
+        }
+      })
+    })
+
+    return () => {
+      unsubscribeContract()
+    }
+  }, [operationMode, onContractUpdate, robotConfigs])
 
   const startRobot = useCallback(
     (robotId: string) => {
@@ -266,15 +425,17 @@ export default function RobotsPage() {
           return prev
         }
 
-        // Simple signal generation (demo mode - random for testing)
-        // In real implementation, this would use actual strategy logic
-        const strategy = strategies.find((s) => s.id === robotId)
-        if (!strategy) return prev
-
-        // Only generate signal every ~10 ticks to avoid too many operations
-        if (state.totalEntries > 0 && state.operations.length > 0) {
+        // Check if there's a pending operation
+        if (state.operations.length > 0) {
           const lastOp = state.operations[state.operations.length - 1]
-          if (lastOp.result === "pending") {
+          
+          // In REAL mode, we wait for the actual contract result from Deriv
+          if (operationMode === "real" && lastOp.result === "pending") {
+            return prev // Wait for real result
+          }
+          
+          // In DEMO mode, simulate result
+          if (operationMode === "demo" && lastOp.result === "pending") {
             // Check if operation should resolve
             const elapsed = Date.now() - lastOp.time.getTime()
             const duration = config.duration * (config.durationType === "m" ? 60000 : config.durationType === "h" ? 3600000 : 1000)
@@ -327,7 +488,7 @@ export default function RobotsPage() {
 
         // Generate new signal with 5% probability per tick
         if (Math.random() > 0.95) {
-          const signal: "CALL" | "PUT" = Math.random() > 0.5 ? "CALL" : "PUT"
+          const signal: "CALL" | "PUT" = generateSignal(robotId, price)
           const martingaleMultiplier = Math.pow(config.martingale, state.currentMartingaleLevel)
           const stake = config.stake * martingaleMultiplier
 
@@ -340,6 +501,11 @@ export default function RobotsPage() {
             result: "pending",
             martingaleLevel: state.currentMartingaleLevel,
             duration: config.duration,
+          }
+
+          // If in REAL mode, send buy request to Deriv
+          if (operationMode === "real") {
+            buyContract(robotId, signal, stake, config)
           }
 
           return {
@@ -356,8 +522,36 @@ export default function RobotsPage() {
         return prev
       })
     },
-    [robotConfigs, stopRobot]
+    [robotConfigs, stopRobot, operationMode, buyContract]
   )
+
+  // Generate signal based on strategy
+  const generateSignal = (robotId: string, price: number): "CALL" | "PUT" => {
+    const strategy = strategies.find((s) => s.id === robotId)
+    if (!strategy) return Math.random() > 0.5 ? "CALL" : "PUT"
+
+    // Simple signal generation based on strategy type
+    // In a real implementation, this would use actual technical indicators
+    switch (strategy.type) {
+      case "trend":
+        // Trend follower - follow the momentum
+        return Math.random() > 0.5 ? "CALL" : "PUT"
+      case "reversal":
+        // Reversal - counter trend
+        return Math.random() > 0.5 ? "PUT" : "CALL"
+      case "martingale":
+        // Martingale - alternate direction
+        return Math.random() > 0.5 ? "CALL" : "PUT"
+      case "scalping":
+        // Scalper - quick decisions
+        return Math.random() > 0.5 ? "CALL" : "PUT"
+      case "grid":
+        // Grid - based on price levels
+        return Math.random() > 0.5 ? "CALL" : "PUT"
+      default:
+        return Math.random() > 0.5 ? "CALL" : "PUT"
+    }
+  }
 
   // Cleanup on unmount
   useEffect(() => {
@@ -376,11 +570,39 @@ export default function RobotsPage() {
             Robos de Trading
           </h1>
           <p className="text-sm text-muted-foreground">
-            Execute multiplas estrategias simultaneamente na conta demo
+            Execute multiplas estrategias simultaneamente
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
+          {/* Operation Mode Toggle */}
+          <div className="flex items-center gap-3 p-3 rounded-lg bg-secondary border border-border">
+            <div className="flex items-center gap-2">
+              <MonitorPlay className={`h-4 w-4 ${operationMode === "demo" ? "text-chart-3" : "text-muted-foreground"}`} />
+              <Label 
+                htmlFor="operation-mode" 
+                className={`text-sm cursor-pointer ${operationMode === "demo" ? "text-chart-3 font-medium" : "text-muted-foreground"}`}
+              >
+                Demonstracao
+              </Label>
+            </div>
+            <Switch
+              id="operation-mode"
+              checked={operationMode === "real"}
+              onCheckedChange={(checked) => setOperationMode(checked ? "real" : "demo")}
+              disabled={overallStats.activeRobots > 0}
+            />
+            <div className="flex items-center gap-2">
+              <Label 
+                htmlFor="operation-mode" 
+                className={`text-sm cursor-pointer ${operationMode === "real" ? "text-primary font-medium" : "text-muted-foreground"}`}
+              >
+                Real
+              </Label>
+              <Zap className={`h-4 w-4 ${operationMode === "real" ? "text-primary" : "text-muted-foreground"}`} />
+            </div>
+          </div>
+
           <Badge variant={overallStats.activeRobots > 0 ? "default" : "secondary"}>
             {overallStats.activeRobots} Robos Ativos
           </Badge>
@@ -392,6 +614,33 @@ export default function RobotsPage() {
           )}
         </div>
       </div>
+
+      {/* Mode Banner */}
+      <Card className={`p-4 mb-6 ${operationMode === "real" ? "border-primary/50 bg-primary/5" : "border-chart-3/50 bg-chart-3/5"}`}>
+        <div className="flex items-center gap-3">
+          {operationMode === "real" ? (
+            <>
+              <Zap className="h-5 w-5 text-primary" />
+              <div>
+                <p className="font-medium text-primary">Modo Real Ativo</p>
+                <p className="text-sm text-muted-foreground">
+                  Os robos estao operando com dinheiro real na sua conta Deriv. Use com cuidado!
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <MonitorPlay className="h-5 w-5 text-chart-3" />
+              <div>
+                <p className="font-medium text-chart-3">Modo Demonstracao</p>
+                <p className="text-sm text-muted-foreground">
+                  Os robos estao simulando operacoes. Nenhuma operacao real sera executada.
+                </p>
+              </div>
+            </>
+          )}
+        </div>
+      </Card>
 
       {/* Overall Stats */}
       <div className="grid gap-4 mb-6 grid-cols-2 lg:grid-cols-5">
@@ -481,6 +730,7 @@ export default function RobotsPage() {
             config={robotConfigs[strategy.id] || defaultConfig}
             state={robotStates[strategy.id]}
             assets={assets}
+            operationMode={operationMode}
             onStart={() => startRobot(strategy.id)}
             onStop={() => stopRobot(strategy.id)}
             onReset={() => resetRobot(strategy.id)}

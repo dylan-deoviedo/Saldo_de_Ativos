@@ -5,7 +5,6 @@ import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Progress } from "@/components/ui/progress"
 import {
   Play,
   Square,
@@ -19,8 +18,9 @@ import {
   Zap,
   Target,
   AlertCircle,
+  MonitorPlay,
 } from "lucide-react"
-import type { RobotStrategy, RobotConfig, RobotState, Operation } from "@/app/robots/page"
+import type { RobotStrategy, RobotConfig, RobotState, Operation, OperationMode } from "@/app/robots/page"
 import type { DerivAsset } from "@/contexts/deriv-context"
 
 interface RobotCardProps {
@@ -28,6 +28,7 @@ interface RobotCardProps {
   config: RobotConfig
   state?: RobotState
   assets: DerivAsset[]
+  operationMode: OperationMode
   onStart: () => void
   onStop: () => void
   onReset: () => void
@@ -39,6 +40,7 @@ export function RobotCard({
   config,
   state,
   assets,
+  operationMode,
   onStart,
   onStop,
   onReset,
@@ -80,7 +82,27 @@ export function RobotCard({
               <p className="text-xs text-muted-foreground">{strategy.description}</p>
             </div>
           </div>
-          <Badge className={getStatusColor()}>{getStatusText()}</Badge>
+          <div className="flex flex-col items-end gap-1">
+            <Badge className={getStatusColor()}>{getStatusText()}</Badge>
+            {state?.isRunning && (
+              <Badge 
+                variant="outline" 
+                className={`text-[10px] ${operationMode === "real" ? "border-primary text-primary" : "border-chart-3 text-chart-3"}`}
+              >
+                {operationMode === "real" ? (
+                  <>
+                    <Zap className="h-3 w-3 mr-1" />
+                    Real
+                  </>
+                ) : (
+                  <>
+                    <MonitorPlay className="h-3 w-3 mr-1" />
+                    Demo
+                  </>
+                )}
+              </Badge>
+            )}
+          </div>
         </div>
 
         {/* Quick Stats */}
@@ -226,9 +248,18 @@ export function RobotCard({
             Parar
           </Button>
         ) : (
-          <Button variant="default" size="sm" className="flex-1" onClick={onStart}>
-            <Play className="h-4 w-4 mr-2" />
-            Iniciar
+          <Button 
+            variant={operationMode === "real" ? "default" : "outline"} 
+            size="sm" 
+            className={`flex-1 ${operationMode === "real" ? "" : "border-chart-3 text-chart-3 hover:bg-chart-3/10"}`}
+            onClick={onStart}
+          >
+            {operationMode === "real" ? (
+              <Zap className="h-4 w-4 mr-2" />
+            ) : (
+              <Play className="h-4 w-4 mr-2" />
+            )}
+            {operationMode === "real" ? "Operar Real" : "Iniciar Demo"}
           </Button>
         )}
         <Button variant="outline" size="sm" onClick={onReset} disabled={state?.isRunning}>
