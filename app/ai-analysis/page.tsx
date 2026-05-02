@@ -10,6 +10,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Slider } from "@/components/ui/slider"
 import {
   TrendingUp,
   TrendingDown,
@@ -21,7 +24,6 @@ import {
   Play,
   Pause,
   RotateCcw,
-  Zap,
   Heart,
   Crown,
   Skull,
@@ -29,22 +31,26 @@ import {
   XCircle,
   Clock,
   BarChart3,
-  Sparkles,
   Dna,
+  Settings2,
+  CandlestickChart,
+  ArrowUp,
+  ArrowDown,
+  Minus,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-// Types for AI Analysis
+// Types
 interface TrendAnalysis {
   direction: "up" | "down" | "lateral"
-  strength: number // 0-100
-  confidence: number // 0-100
+  strength: number
+  confidence: number
 }
 
 interface SupportResistance {
   type: "support" | "resistance"
   price: number
-  strength: number // how many times tested
+  strength: number
   active: boolean
 }
 
@@ -63,6 +69,17 @@ interface Prediction {
   entryPrice: number
   result?: "win" | "loss" | "pending"
   exitPrice?: number
+  candleOpen?: number
+  candleClose?: number
+}
+
+interface CandleData {
+  time: number
+  open: number
+  high: number
+  low: number
+  close: number
+  direction: "up" | "down"
 }
 
 interface AIBrain {
@@ -71,41 +88,26 @@ interface AIBrain {
   generation: number
   lives: number
   maxLives: number
-  predictions: Prediction[]
   wins: number
   losses: number
   accuracy: number
-  weights: number[] // Neural network weights
+  weights: number[]
   isActive: boolean
-  createdAt: number
-  parentId?: string
+  currentPrediction: Prediction | null
+  lastCandleDirection?: "up" | "down"
 }
 
-interface MarketData {
-  ticks: TickData[]
-  candles: OHLCCandle[]
-  currentPrice: number
-  highPrice: number
-  lowPrice: number
-  openPrice: number
-  volume: number
-}
-
-// Simple neural network implementation
+// Neural Network
 class NeuralNetwork {
   weights: number[]
   
   constructor(weights?: number[]) {
-    // 20 inputs (price features) -> 10 hidden -> 1 output
     this.weights = weights || this.initializeWeights()
   }
   
   initializeWeights(): number[] {
     const weights: number[] = []
-    // Input to hidden: 20 * 10 = 200
-    // Hidden to output: 10 * 1 = 10
-    // Biases: 10 + 1 = 11
-    for (let i = 0; i < 221; i++) {
+    for (let i = 0; i < 331; i++) {
       weights.push(Math.random() * 2 - 1)
     }
     return weights
@@ -116,26 +118,23 @@ class NeuralNetwork {
   }
   
   predict(inputs: number[]): number {
-    // Normalize inputs
-    const normalizedInputs = inputs.slice(0, 20)
-    while (normalizedInputs.length < 20) {
+    const normalizedInputs = inputs.slice(0, 30)
+    while (normalizedInputs.length < 30) {
       normalizedInputs.push(0)
     }
     
-    // Input to hidden layer
     const hidden: number[] = []
     for (let i = 0; i < 10; i++) {
-      let sum = this.weights[200 + i] // bias
-      for (let j = 0; j < 20; j++) {
-        sum += normalizedInputs[j] * this.weights[i * 20 + j]
+      let sum = this.weights[300 + i]
+      for (let j = 0; j < 30; j++) {
+        sum += normalizedInputs[j] * this.weights[i * 30 + j]
       }
       hidden.push(this.sigmoid(sum))
     }
     
-    // Hidden to output
-    let output = this.weights[220] // bias
+    let output = this.weights[330]
     for (let i = 0; i < 10; i++) {
-      output += hidden[i] * this.weights[210 + i]
+      output += hidden[i] * this.weights[310 + i]
     }
     
     return this.sigmoid(output)
@@ -150,44 +149,54 @@ class NeuralNetwork {
     })
   }
   
-  crossover(other: number[]): number[] {
-    return this.weights.map((w, i) => 
-      Math.random() < 0.5 ? w : other[i]
-    )
+  train(inputs: number[], target: number, learningRate: number = 0.01) {
+    const output = this.predict(inputs)
+    const error = target - output
+    this.weights = this.weights.map((w, i) => {
+      const inputIndex = i % 30
+      const adjustment = error * learningRate * (inputs[inputIndex] || 0)
+      return w + adjustment
+    })
   }
 }
 
-// Extract features from market data
-function extractFeatures(ticks: TickData[], candles: OHLCCandle[]): number[] {
+// Feature extraction
+function extractFeatures(
+  ticks: TickData[],
+  candles1m: OHLCCandle[],
+  candles5m: OHLCCandle[],
+  candles15m: OHLCCandle[],
+  candles1h: OHLCCandle[],
+  trends: Record<string, TrendAnalysis>
+): number[] {
   const features: number[] = []
   
   if (ticks.length < 10) {
-    return Array(20).fill(0)
+    return Array(30).fill(0)
   }
   
-  const recentTicks = ticks.slice(-20)
-  const prices = recentTicks.map(t => t.price)
+  const prices = ticks.slice(-30).map(t => t.price)
   
-  // Price momentum (last 5 vs previous 5)
+  // Price momentum
   const recent5 = prices.slice(-5)
   const prev5 = prices.slice(-10, -5)
   const recentAvg = recent5.reduce((a, b) => a + b, 0) / 5
   const prevAvg = prev5.length > 0 ? prev5.reduce((a, b) => a + b, 0) / 5 : recentAvg
-  features.push((recentAvg - prevAvg) / prevAvg * 100) // Momentum
+  features.push((recentAvg - prevAvg) / prevAvg * 100)
   
-  // Price changes
-  for (let i = 1; i <= 10 && i < prices.length; i++) {
+  // Recent price changes
+  for (let i = 1; i <= 5 && i < prices.length; i++) {
     const change = (prices[prices.length - i] - prices[prices.length - i - 1]) / prices[prices.length - i - 1] * 100
     features.push(change)
   }
-  while (features.length < 11) features.push(0)
+  while (features.length < 6) features.push(0)
   
   // Volatility
   const mean = prices.reduce((a, b) => a + b, 0) / prices.length
   const variance = prices.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / prices.length
   features.push(Math.sqrt(variance) / mean * 100)
   
-  // RSI-like
+  // RSI
   let gains = 0, losses = 0
   for (let i = 1; i < prices.length; i++) {
     const change = prices[i] - prices[i - 1]
@@ -197,53 +206,52 @@ function extractFeatures(ticks: TickData[], candles: OHLCCandle[]): number[] {
   const rsi = losses === 0 ? 100 : 100 - (100 / (1 + gains / losses))
   features.push(rsi / 100)
   
-  // Trend direction
-  const firstHalf = prices.slice(0, Math.floor(prices.length / 2))
-  const secondHalf = prices.slice(Math.floor(prices.length / 2))
-  const firstAvg = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length
-  const secondAvg = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length
-  features.push((secondAvg - firstAvg) / firstAvg * 100)
+  // Trend features
+  features.push(trends["1m"]?.direction === "up" ? 1 : trends["1m"]?.direction === "down" ? -1 : 0)
+  features.push(trends["5m"]?.direction === "up" ? 1 : trends["5m"]?.direction === "down" ? -1 : 0)
+  features.push(trends["15m"]?.direction === "up" ? 1 : trends["15m"]?.direction === "down" ? -1 : 0)
+  features.push(trends["1h"]?.direction === "up" ? 1 : trends["1h"]?.direction === "down" ? -1 : 0)
+  features.push((trends["1m"]?.strength || 50) / 100)
+  features.push((trends["5m"]?.strength || 50) / 100)
   
-  // Candle patterns (if available)
-  if (candles.length >= 3) {
-    const lastCandle = candles[candles.length - 1]
-    const prevCandle = candles[candles.length - 2]
-    
-    // Candle body size
-    features.push((lastCandle.close - lastCandle.open) / lastCandle.open * 100)
-    // Upper shadow
-    features.push((lastCandle.high - Math.max(lastCandle.open, lastCandle.close)) / lastCandle.open * 100)
-    // Lower shadow
-    features.push((Math.min(lastCandle.open, lastCandle.close) - lastCandle.low) / lastCandle.open * 100)
-    // Candle direction change
-    features.push(lastCandle.close > lastCandle.open ? 1 : -1)
-    features.push(prevCandle.close > prevCandle.open ? 1 : -1)
-  } else {
-    features.push(0, 0, 0, 0, 0)
+  // Candle patterns from different timeframes
+  const addCandleFeatures = (candles: OHLCCandle[]) => {
+    if (candles.length >= 3) {
+      const last = candles[candles.length - 1]
+      const prev = candles[candles.length - 2]
+      features.push((last.close - last.open) / last.open * 100)
+      features.push((prev.close - prev.open) / prev.open * 100)
+      features.push(last.close > last.open ? 1 : -1)
+    } else {
+      features.push(0, 0, 0)
+    }
   }
   
-  // Pad to 20 features
-  while (features.length < 20) features.push(0)
+  addCandleFeatures(candles1m)
+  addCandleFeatures(candles5m)
+  addCandleFeatures(candles15m)
+  addCandleFeatures(candles1h)
   
-  return features.slice(0, 20)
+  while (features.length < 30) features.push(0)
+  return features.slice(0, 30)
 }
 
 export default function AIAnalysisPage() {
   const { assets, isConnected, subscribeToTicks, getTicksHistory, subscribeToCandles } = useDerivContext()
   
-  // State
+  // Asset selection
   const [selectedAsset, setSelectedAsset] = useState<string>("")
-  const [marketData, setMarketData] = useState<MarketData>({
-    ticks: [],
-    candles: [],
-    currentPrice: 0,
-    highPrice: 0,
-    lowPrice: 0,
-    openPrice: 0,
-    volume: 0,
-  })
   
-  // Trend analysis state
+  // Market data for different timeframes
+  const [ticks, setTicks] = useState<TickData[]>([])
+  const [candles1m, setCandles1m] = useState<OHLCCandle[]>([])
+  const [candles5m, setCandles5m] = useState<OHLCCandle[]>([])
+  const [candles15m, setCandles15m] = useState<OHLCCandle[]>([])
+  const [candles1h, setCandles1h] = useState<OHLCCandle[]>([])
+  const [currentPrice, setCurrentPrice] = useState(0)
+  const [currentCandle, setCurrentCandle] = useState<CandleData | null>(null)
+  
+  // Trends
   const [trends, setTrends] = useState<Record<string, TrendAnalysis>>({
     "1m": { direction: "lateral", strength: 50, confidence: 0 },
     "5m": { direction: "lateral", strength: 50, confidence: 0 },
@@ -254,34 +262,76 @@ export default function AIAnalysisPage() {
   const [supportResistance, setSupportResistance] = useState<SupportResistance[]>([])
   const [indicators, setIndicators] = useState<TechnicalIndicator[]>([])
   
-  // AI State
-  const [isAIActive, setIsAIActive] = useState(false)
-  const [isTraining, setIsTraining] = useState(false)
-  const [predictions, setPredictions] = useState<Prediction[]>([])
-  const [currentPrediction, setCurrentPrediction] = useState<Prediction | null>(null)
+  // AI Configuration
+  const [predictionTimeframe, setPredictionTimeframe] = useState<string>("60") // seconds
+  const [candlesToWait, setCandlesToWait] = useState<number>(1)
   
-  // Evolution Mode
-  const [isEvolutionMode, setIsEvolutionMode] = useState(false)
-  const [brains, setBrains] = useState<AIBrain[]>([])
+  // Simple AI State
+  const [isSimpleAIActive, setIsSimpleAIActive] = useState(false)
+  const [isSimpleAITraining, setIsSimpleAITraining] = useState(false)
+  const [simpleAILives, setSimpleAILives] = useState(10)
+  const [simpleAIMaxLives, setSimpleAIMaxLives] = useState(10)
+  const [simpleAIPrediction, setSimpleAIPrediction] = useState<Prediction | null>(null)
+  const [simpleAIHistory, setSimpleAIHistory] = useState<Prediction[]>([])
+  const [simpleAIGeneration, setSimpleAIGeneration] = useState(1)
+  const [candleCount, setCandleCount] = useState(0)
+  
+  // Evolution State
+  const [isEvolutionActive, setIsEvolutionActive] = useState(false)
+  const [evolutionBrains, setEvolutionBrains] = useState<AIBrain[]>([])
+  const [evolutionBrainCount, setEvolutionBrainCount] = useState(10)
+  const [evolutionMaxLives, setEvolutionMaxLives] = useState(10)
+  const [evolutionGeneration, setEvolutionGeneration] = useState(1)
   const [bestBrain, setBestBrain] = useState<AIBrain | null>(null)
-  const [generation, setGeneration] = useState(1)
   
   // Refs
-  const tickUnsubscribeRef = useRef<(() => void) | null>(null)
-  const candleUnsubscribeRef = useRef<(() => void) | null>(null)
-  const neuralNetworkRef = useRef<NeuralNetwork>(new NeuralNetwork())
-  const predictionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const tickUnsubRef = useRef<(() => void) | null>(null)
+  const candle1mUnsubRef = useRef<(() => void) | null>(null)
+  const candle5mUnsubRef = useRef<(() => void) | null>(null)
+  const simpleNNRef = useRef<NeuralNetwork>(new NeuralNetwork())
+  const pendingCandleRef = useRef<{ open: number; time: number } | null>(null)
   
-  // Filter synthetic assets
   const syntheticAssets = assets.filter(
     (asset) => asset.market === "synthetic_index" || asset.submarket === "random_index"
   )
   
-  // Calculate technical indicators
-  const calculateIndicators = useCallback((ticks: TickData[], candles: OHLCCandle[]) => {
-    if (ticks.length < 14) return
+  // Calculate trend
+  const calculateTrend = useCallback((candles: OHLCCandle[]): TrendAnalysis => {
+    if (candles.length < 5) {
+      return { direction: "lateral", strength: 50, confidence: 0 }
+    }
     
-    const prices = ticks.map(t => t.price)
+    const closes = candles.map(c => c.close)
+    const firstHalf = closes.slice(0, Math.floor(closes.length / 2))
+    const secondHalf = closes.slice(Math.floor(closes.length / 2))
+    
+    const firstAvg = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length
+    const secondAvg = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length
+    
+    const change = ((secondAvg - firstAvg) / firstAvg) * 100
+    
+    let direction: "up" | "down" | "lateral" = "lateral"
+    if (change > 0.05) direction = "up"
+    else if (change < -0.05) direction = "down"
+    
+    let upMoves = 0, downMoves = 0
+    for (let i = 1; i < closes.length; i++) {
+      if (closes[i] > closes[i-1]) upMoves++
+      else if (closes[i] < closes[i-1]) downMoves++
+    }
+    
+    const consistency = Math.abs(upMoves - downMoves) / (closes.length - 1)
+    const strength = Math.min(100, Math.abs(change) * 20 + consistency * 50)
+    const confidence = Math.min(100, candles.length * 3)
+    
+    return { direction, strength, confidence }
+  }, [])
+  
+  // Calculate indicators
+  const calculateIndicators = useCallback((tickData: TickData[], candleData: OHLCCandle[]) => {
+    if (tickData.length < 14) return
+    
+    const prices = tickData.map(t => t.price)
     const newIndicators: TechnicalIndicator[] = []
     
     // RSI
@@ -303,26 +353,26 @@ export default function AIAnalysisPage() {
       description: rsi > 70 ? "Sobrecomprado" : rsi < 30 ? "Sobrevendido" : "Neutro",
     })
     
-    // Moving Averages
+    // MAs
     const ma7 = prices.slice(-7).reduce((a, b) => a + b, 0) / 7
     const ma14 = prices.slice(-14).reduce((a, b) => a + b, 0) / 14
-    const currentPrice = prices[prices.length - 1]
+    const current = prices[prices.length - 1]
     
     newIndicators.push({
       name: "MA7",
       value: ma7,
-      signal: currentPrice > ma7 ? "buy" : "sell",
-      description: currentPrice > ma7 ? "Preco acima da media" : "Preco abaixo da media",
+      signal: current > ma7 ? "buy" : "sell",
+      description: current > ma7 ? "Preco acima da media" : "Preco abaixo da media",
     })
     
     newIndicators.push({
       name: "MA14",
       value: ma14,
-      signal: currentPrice > ma14 ? "buy" : "sell",
-      description: currentPrice > ma14 ? "Tendencia de alta" : "Tendencia de baixa",
+      signal: current > ma14 ? "buy" : "sell",
+      description: current > ma14 ? "Tendencia de alta" : "Tendencia de baixa",
     })
     
-    // MACD-like
+    // MACD
     const ma5 = prices.slice(-5).reduce((a, b) => a + b, 0) / 5
     const ma10 = prices.slice(-10).reduce((a, b) => a + b, 0) / 10
     const macd = ma5 - ma10
@@ -343,344 +393,243 @@ export default function AIAnalysisPage() {
       name: "Volatilidade",
       value: volatility,
       signal: "neutral",
-      description: volatility > 1 ? "Alta volatilidade" : volatility > 0.5 ? "Media volatilidade" : "Baixa volatilidade",
+      description: volatility > 1 ? "Alta" : volatility > 0.5 ? "Media" : "Baixa",
     })
     
     setIndicators(newIndicators)
     
-    // Calculate support/resistance levels
-    if (candles.length >= 20) {
+    // Support/Resistance
+    if (candleData.length >= 20) {
       const levels: SupportResistance[] = []
-      const highs = candles.map(c => c.high)
-      const lows = candles.map(c => c.low)
+      const highs = candleData.map(c => c.high)
+      const lows = candleData.map(c => c.low)
       
-      // Find resistance levels (local maxima)
       for (let i = 2; i < highs.length - 2; i++) {
         if (highs[i] > highs[i-1] && highs[i] > highs[i-2] && 
             highs[i] > highs[i+1] && highs[i] > highs[i+2]) {
           const existing = levels.find(l => Math.abs(l.price - highs[i]) / highs[i] < 0.001)
-          if (existing) {
-            existing.strength++
-          } else {
-            levels.push({
-              type: "resistance",
-              price: highs[i],
-              strength: 1,
-              active: highs[i] > currentPrice,
-            })
-          }
+          if (existing) existing.strength++
+          else levels.push({ type: "resistance", price: highs[i], strength: 1, active: highs[i] > current })
         }
       }
       
-      // Find support levels (local minima)
       for (let i = 2; i < lows.length - 2; i++) {
         if (lows[i] < lows[i-1] && lows[i] < lows[i-2] && 
             lows[i] < lows[i+1] && lows[i] < lows[i+2]) {
           const existing = levels.find(l => Math.abs(l.price - lows[i]) / lows[i] < 0.001)
-          if (existing) {
-            existing.strength++
-          } else {
-            levels.push({
-              type: "support",
-              price: lows[i],
-              strength: 1,
-              active: lows[i] < currentPrice,
-            })
-          }
+          if (existing) existing.strength++
+          else levels.push({ type: "support", price: lows[i], strength: 1, active: lows[i] < current })
         }
       }
       
-      // Sort by strength and take top 6
       levels.sort((a, b) => b.strength - a.strength)
       setSupportResistance(levels.slice(0, 6))
     }
   }, [])
   
-  // Calculate trend for a timeframe
-  const calculateTrend = useCallback((candles: OHLCCandle[]): TrendAnalysis => {
-    if (candles.length < 5) {
-      return { direction: "lateral", strength: 50, confidence: 0 }
-    }
-    
-    const closes = candles.map(c => c.close)
-    const firstHalf = closes.slice(0, Math.floor(closes.length / 2))
-    const secondHalf = closes.slice(Math.floor(closes.length / 2))
-    
-    const firstAvg = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length
-    const secondAvg = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length
-    
-    const change = ((secondAvg - firstAvg) / firstAvg) * 100
-    
-    let direction: "up" | "down" | "lateral" = "lateral"
-    if (change > 0.1) direction = "up"
-    else if (change < -0.1) direction = "down"
-    
-    // Calculate strength based on consistency
-    let upMoves = 0, downMoves = 0
-    for (let i = 1; i < closes.length; i++) {
-      if (closes[i] > closes[i-1]) upMoves++
-      else if (closes[i] < closes[i-1]) downMoves++
-    }
-    
-    const consistency = Math.abs(upMoves - downMoves) / (closes.length - 1)
-    const strength = Math.min(100, Math.abs(change) * 10 + consistency * 50)
-    const confidence = Math.min(100, candles.length * 5)
-    
-    return { direction, strength, confidence }
-  }, [])
-  
-  // Load historical data when asset changes
+  // Load data when asset changes
   useEffect(() => {
     if (!selectedAsset || !isConnected) return
     
-    // Unsubscribe from previous
-    if (tickUnsubscribeRef.current) {
-      tickUnsubscribeRef.current()
-    }
-    if (candleUnsubscribeRef.current) {
-      candleUnsubscribeRef.current()
-    }
+    // Cleanup
+    if (tickUnsubRef.current) tickUnsubRef.current()
+    if (candle1mUnsubRef.current) candle1mUnsubRef.current()
+    if (candle5mUnsubRef.current) candle5mUnsubRef.current()
     
-    // Load historical data for multiple timeframes
     const loadData = async () => {
       try {
-        // Get tick history
         const tickHistory = await getTicksHistory(selectedAsset, 100) as TickData[]
+        const c1m = await getTicksHistory(selectedAsset, 50, 60) as OHLCCandle[]
+        const c5m = await getTicksHistory(selectedAsset, 50, 300) as OHLCCandle[]
+        const c15m = await getTicksHistory(selectedAsset, 30, 900) as OHLCCandle[]
+        const c1h = await getTicksHistory(selectedAsset, 30, 3600) as OHLCCandle[]
         
-        // Get candle history for different timeframes
-        const candles1m = await getTicksHistory(selectedAsset, 50, 60) as OHLCCandle[]
-        const candles5m = await getTicksHistory(selectedAsset, 50, 300) as OHLCCandle[]
-        const candles15m = await getTicksHistory(selectedAsset, 50, 900) as OHLCCandle[]
-        const candles1h = await getTicksHistory(selectedAsset, 50, 3600) as OHLCCandle[]
+        setTicks(tickHistory)
+        setCandles1m(c1m)
+        setCandles5m(c5m)
+        setCandles15m(c15m)
+        setCandles1h(c1h)
         
         if (tickHistory.length > 0) {
-          const prices = tickHistory.map(t => t.price)
-          setMarketData({
-            ticks: tickHistory,
-            candles: candles1m,
-            currentPrice: prices[prices.length - 1],
-            highPrice: Math.max(...prices),
-            lowPrice: Math.min(...prices),
-            openPrice: prices[0],
-            volume: tickHistory.length,
-          })
-          
-          calculateIndicators(tickHistory, candles1m)
+          setCurrentPrice(tickHistory[tickHistory.length - 1].price)
+          calculateIndicators(tickHistory, c1m)
         }
         
-        // Calculate trends for each timeframe
+        if (c1m.length > 0) {
+          const last = c1m[c1m.length - 1]
+          setCurrentCandle({
+            time: last.time,
+            open: last.open,
+            high: last.high,
+            low: last.low,
+            close: last.close,
+            direction: last.close >= last.open ? "up" : "down"
+          })
+        }
+        
         setTrends({
-          "1m": calculateTrend(candles1m),
-          "5m": calculateTrend(candles5m),
-          "15m": calculateTrend(candles15m),
-          "1h": calculateTrend(candles1h),
+          "1m": calculateTrend(c1m),
+          "5m": calculateTrend(c5m),
+          "15m": calculateTrend(c15m),
+          "1h": calculateTrend(c1h),
         })
         
       } catch (error) {
-        console.error("Error loading market data:", error)
+        console.error("Error loading data:", error)
       }
     }
     
     loadData()
     
-    // Subscribe to live ticks
-    tickUnsubscribeRef.current = subscribeToTicks(selectedAsset, (tick) => {
-      setMarketData(prev => {
-        const newTicks = [...prev.ticks.slice(-99), tick]
-        const prices = newTicks.map(t => t.price)
-        
-        return {
-          ...prev,
-          ticks: newTicks,
-          currentPrice: tick.price,
-          highPrice: Math.max(prev.highPrice, tick.price),
-          lowPrice: Math.min(prev.lowPrice, tick.price),
-        }
-      })
+    // Subscribe to ticks
+    tickUnsubRef.current = subscribeToTicks(selectedAsset, (tick) => {
+      setTicks(prev => [...prev.slice(-99), tick])
+      setCurrentPrice(tick.price)
     })
     
-    // Subscribe to candles
-    candleUnsubscribeRef.current = subscribeToCandles(selectedAsset, 60, (candle) => {
-      setMarketData(prev => {
-        const newCandles = [...prev.candles.slice(-49), candle]
-        calculateIndicators(prev.ticks, newCandles)
-        setTrends(t => ({
-          ...t,
-          "1m": calculateTrend(newCandles),
-        }))
-        return {
-          ...prev,
-          candles: newCandles,
-        }
+    // Subscribe to 1m candles
+    candle1mUnsubRef.current = subscribeToCandles(selectedAsset, 60, (candle) => {
+      setCandles1m(prev => {
+        const newCandles = [...prev.slice(-49), candle]
+        setTrends(t => ({ ...t, "1m": calculateTrend(newCandles) }))
+        return newCandles
       })
+      
+      setCurrentCandle({
+        time: candle.time,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+        direction: candle.close >= candle.open ? "up" : "down"
+      })
+      
+      setCandleCount(c => c + 1)
     })
     
     return () => {
-      if (tickUnsubscribeRef.current) {
-        tickUnsubscribeRef.current()
-      }
-      if (candleUnsubscribeRef.current) {
-        candleUnsubscribeRef.current()
-      }
+      if (tickUnsubRef.current) tickUnsubRef.current()
+      if (candle1mUnsubRef.current) candle1mUnsubRef.current()
+      if (candle5mUnsubRef.current) candle5mUnsubRef.current()
     }
-  }, [selectedAsset, isConnected, subscribeToTicks, subscribeToCandles, getTicksHistory, calculateIndicators, calculateTrend])
+  }, [selectedAsset, isConnected, subscribeToTicks, subscribeToCandles, getTicksHistory, calculateTrend, calculateIndicators])
   
-  // AI Prediction logic
-  const makePrediction = useCallback(() => {
-    if (marketData.ticks.length < 20) return null
-    
-    const features = extractFeatures(marketData.ticks, marketData.candles)
-    const output = neuralNetworkRef.current.predict(features)
-    
-    const direction: "CALL" | "PUT" = output > 0.5 ? "CALL" : "PUT"
-    const confidence = Math.abs(output - 0.5) * 200 // 0-100
-    
-    const prediction: Prediction = {
-      id: `pred_${Date.now()}`,
-      timestamp: Date.now(),
-      direction,
-      confidence,
-      entryPrice: marketData.currentPrice,
-      result: "pending",
-    }
-    
-    return prediction
-  }, [marketData])
-  
-  // Check prediction result
-  const checkPrediction = useCallback((prediction: Prediction, currentPrice: number): "win" | "loss" => {
-    const priceChange = currentPrice - prediction.entryPrice
-    
-    if (prediction.direction === "CALL") {
-      return priceChange > 0 ? "win" : "loss"
-    } else {
-      return priceChange < 0 ? "win" : "loss"
-    }
-  }, [])
-  
-  // AI Analysis loop
+  // Simple AI Logic
   useEffect(() => {
-    if (!isAIActive || !selectedAsset || marketData.ticks.length < 20) return
-    
-    const analyzeInterval = setInterval(() => {
-      const prediction = makePrediction()
-      if (prediction) {
-        setCurrentPrediction(prediction)
-        
-        // Check result after 5 seconds (simulating tick duration)
-        if (predictionTimeoutRef.current) {
-          clearTimeout(predictionTimeoutRef.current)
-        }
-        
-        predictionTimeoutRef.current = setTimeout(() => {
-          setCurrentPrediction(prev => {
-            if (!prev) return null
-            
-            const result = checkPrediction(prev, marketData.currentPrice)
-            const completedPrediction = {
-              ...prev,
-              result,
-              exitPrice: marketData.currentPrice,
-            }
-            
-            setPredictions(p => [completedPrediction, ...p.slice(0, 99)])
-            
-            // Update neural network through training
-            if (isTraining) {
-              const features = extractFeatures(marketData.ticks, marketData.candles)
-              const target = result === "win" ? (prev.direction === "CALL" ? 0.9 : 0.1) : (prev.direction === "CALL" ? 0.1 : 0.9)
-              // Simple weight adjustment
-              neuralNetworkRef.current.weights = neuralNetworkRef.current.weights.map((w, i) => {
-                const adjustment = (target - neuralNetworkRef.current.predict(features)) * 0.01 * features[i % 20]
-                return w + adjustment
-              })
-            }
-            
-            return null
-          })
-        }, 5000)
+    if (!isSimpleAIActive || !selectedAsset || ticks.length < 20) return
+    if (simpleAILives <= 0) {
+      // Reset and evolve
+      if (isSimpleAITraining) {
+        simpleNNRef.current = new NeuralNetwork(simpleNNRef.current.mutate(0.15))
+        setSimpleAIGeneration(g => g + 1)
+        setSimpleAILives(simpleAIMaxLives)
+      } else {
+        setIsSimpleAIActive(false)
       }
-    }, 3000)
-    
-    return () => {
-      clearInterval(analyzeInterval)
-      if (predictionTimeoutRef.current) {
-        clearTimeout(predictionTimeoutRef.current)
-      }
+      return
     }
-  }, [isAIActive, selectedAsset, marketData, makePrediction, checkPrediction, isTraining])
-  
-  // Evolution mode logic
-  useEffect(() => {
-    if (!isEvolutionMode || !selectedAsset || marketData.ticks.length < 20) return
     
-    // Initialize brains if empty
-    if (brains.length === 0) {
+    // Wait for configured candles before first prediction
+    if (candleCount < candlesToWait && !simpleAIPrediction) return
+    
+    // Check previous prediction result when new candle arrives
+    if (simpleAIPrediction && simpleAIPrediction.result === "pending" && currentCandle) {
+      const candleDirection = currentCandle.close >= currentCandle.open ? "CALL" : "PUT"
+      const isWin = simpleAIPrediction.direction === candleDirection
+      
+      const completedPrediction: Prediction = {
+        ...simpleAIPrediction,
+        result: isWin ? "win" : "loss",
+        exitPrice: currentCandle.close,
+        candleOpen: currentCandle.open,
+        candleClose: currentCandle.close,
+      }
+      
+      setSimpleAIHistory(prev => [completedPrediction, ...prev.slice(0, 99)])
+      
+      // Update lives
+      setSimpleAILives(prev => isWin ? Math.min(prev + 1, simpleAIMaxLives) : prev - 1)
+      
+      // Train if enabled
+      if (isSimpleAITraining) {
+        const features = extractFeatures(ticks, candles1m, candles5m, candles15m, candles1h, trends)
+        const target = candleDirection === "CALL" ? 0.9 : 0.1
+        simpleNNRef.current.train(features, target, 0.02)
+      }
+      
+      // Make new prediction
+      const features = extractFeatures(ticks, candles1m, candles5m, candles15m, candles1h, trends)
+      const output = simpleNNRef.current.predict(features)
+      const direction: "CALL" | "PUT" = output > 0.5 ? "CALL" : "PUT"
+      const confidence = Math.abs(output - 0.5) * 200
+      
+      setSimpleAIPrediction({
+        id: `simple_${Date.now()}`,
+        timestamp: Date.now(),
+        direction,
+        confidence,
+        entryPrice: currentPrice,
+        result: "pending",
+      })
+    } else if (!simpleAIPrediction) {
+      // Initial prediction
+      const features = extractFeatures(ticks, candles1m, candles5m, candles15m, candles1h, trends)
+      const output = simpleNNRef.current.predict(features)
+      const direction: "CALL" | "PUT" = output > 0.5 ? "CALL" : "PUT"
+      const confidence = Math.abs(output - 0.5) * 200
+      
+      setSimpleAIPrediction({
+        id: `simple_${Date.now()}`,
+        timestamp: Date.now(),
+        direction,
+        confidence,
+        entryPrice: currentPrice,
+        result: "pending",
+      })
+    }
+  }, [isSimpleAIActive, selectedAsset, ticks, currentCandle, simpleAIPrediction, candleCount, candlesToWait, simpleAILives, simpleAIMaxLives, isSimpleAITraining, candles1m, candles5m, candles15m, candles1h, trends, currentPrice])
+  
+  // Evolution Logic
+  useEffect(() => {
+    if (!isEvolutionActive || !selectedAsset || ticks.length < 20) return
+    
+    // Initialize brains
+    if (evolutionBrains.length === 0) {
       const initialBrains: AIBrain[] = []
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < evolutionBrainCount; i++) {
         const nn = new NeuralNetwork()
         initialBrains.push({
           id: `brain_${i}`,
           name: `Robo ${i + 1}`,
           generation: 1,
-          lives: 10,
-          maxLives: 10,
-          predictions: [],
+          lives: evolutionMaxLives,
+          maxLives: evolutionMaxLives,
           wins: 0,
           losses: 0,
           accuracy: 0,
           weights: nn.weights,
           isActive: true,
-          createdAt: Date.now(),
+          currentPrediction: null,
         })
       }
-      setBrains(initialBrains)
+      setEvolutionBrains(initialBrains)
       return
     }
     
-    const evolveInterval = setInterval(() => {
-      setBrains(prevBrains => {
-        const features = extractFeatures(marketData.ticks, marketData.candles)
-        const currentPrice = marketData.currentPrice
-        
-        return prevBrains.map(brain => {
-          if (!brain.isActive || brain.lives <= 0) return brain
-          
-          const nn = new NeuralNetwork(brain.weights)
-          const output = nn.predict(features)
-          const direction: "CALL" | "PUT" = output > 0.5 ? "CALL" : "PUT"
-          const confidence = Math.abs(output - 0.5) * 200
-          
-          const prediction: Prediction = {
-            id: `pred_${brain.id}_${Date.now()}`,
-            timestamp: Date.now(),
-            direction,
-            confidence,
-            entryPrice: currentPrice,
-            result: "pending",
-          }
-          
-          return {
-            ...brain,
-            predictions: [prediction, ...brain.predictions.slice(0, 19)],
-          }
-        })
-      })
+    // Check results and make new predictions on candle close
+    if (currentCandle) {
+      const candleDirection: "up" | "down" = currentCandle.close >= currentCandle.open ? "up" : "down"
       
-      // Check results after delay
-      setTimeout(() => {
-        setBrains(prevBrains => {
-          let updatedBrains = prevBrains.map(brain => {
-            if (!brain.isActive || brain.lives <= 0) return brain
+      setEvolutionBrains(prevBrains => {
+        let updatedBrains = prevBrains.map(brain => {
+          if (!brain.isActive) return brain
+          
+          // Check previous prediction
+          if (brain.currentPrediction && brain.currentPrediction.result === "pending") {
+            const predictedDir = brain.currentPrediction.direction === "CALL" ? "up" : "down"
+            const isWin = predictedDir === candleDirection
             
-            const lastPrediction = brain.predictions[0]
-            if (!lastPrediction || lastPrediction.result !== "pending") return brain
-            
-            const priceChange = marketData.currentPrice - lastPrediction.entryPrice
-            const isWin = (lastPrediction.direction === "CALL" && priceChange > 0) ||
-                          (lastPrediction.direction === "PUT" && priceChange < 0)
-            
-            const newLives = isWin ? brain.lives : brain.lives - 1
+            const newLives = isWin ? Math.min(brain.lives + 1, brain.maxLives) : brain.lives - 1
             const newWins = isWin ? brain.wins + 1 : brain.wins
             const newLosses = isWin ? brain.losses : brain.losses + 1
             const newAccuracy = newWins + newLosses > 0 ? (newWins / (newWins + newLosses)) * 100 : 0
@@ -692,82 +641,102 @@ export default function AIAnalysisPage() {
               losses: newLosses,
               accuracy: newAccuracy,
               isActive: newLives > 0,
-              predictions: brain.predictions.map((p, i) => 
-                i === 0 ? { ...p, result: isWin ? "win" : "loss" as const, exitPrice: marketData.currentPrice } : p
-              ),
+              currentPrediction: null,
+              lastCandleDirection: candleDirection,
+            }
+          }
+          
+          return brain
+        })
+        
+        // Make new predictions for active brains
+        const features = extractFeatures(ticks, candles1m, candles5m, candles15m, candles1h, trends)
+        
+        updatedBrains = updatedBrains.map(brain => {
+          if (!brain.isActive || brain.currentPrediction) return brain
+          
+          const nn = new NeuralNetwork(brain.weights)
+          const output = nn.predict(features)
+          const direction: "CALL" | "PUT" = output > 0.5 ? "CALL" : "PUT"
+          const confidence = Math.abs(output - 0.5) * 200
+          
+          return {
+            ...brain,
+            currentPrediction: {
+              id: `evo_${brain.id}_${Date.now()}`,
+              timestamp: Date.now(),
+              direction,
+              confidence,
+              entryPrice: currentPrice,
+              result: "pending" as const,
+            },
+          }
+        })
+        
+        // Find best brain
+        const activeBrains = updatedBrains.filter(b => b.isActive)
+        const sorted = [...updatedBrains].sort((a, b) => {
+          const aScore = a.accuracy * Math.log(a.wins + a.losses + 1)
+          const bScore = b.accuracy * Math.log(b.wins + b.losses + 1)
+          return bScore - aScore
+        })
+        
+        if (sorted[0]) setBestBrain(sorted[0])
+        
+        // Replace dead brains with mutations of best
+        const deadCount = updatedBrains.filter(b => !b.isActive).length
+        if (deadCount > 0 && sorted[0]) {
+          const bestWeights = sorted[0].weights
+          let newGen = evolutionGeneration
+          
+          updatedBrains = updatedBrains.map(brain => {
+            if (brain.isActive) return brain
+            
+            const nn = new NeuralNetwork(bestWeights)
+            const mutatedWeights = nn.mutate(0.2)
+            newGen++
+            
+            return {
+              id: `brain_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              name: `Robo G${Math.floor(newGen / evolutionBrainCount) + 1}`,
+              generation: Math.floor(newGen / evolutionBrainCount) + 1,
+              lives: evolutionMaxLives,
+              maxLives: evolutionMaxLives,
+              wins: 0,
+              losses: 0,
+              accuracy: 0,
+              weights: mutatedWeights,
+              isActive: true,
+              currentPrediction: null,
             }
           })
           
-          // Find best brain
-          const activeBrains = updatedBrains.filter(b => b.isActive)
-          const sortedByAccuracy = [...updatedBrains].sort((a, b) => {
-            const aScore = a.accuracy * (a.wins + a.losses)
-            const bScore = b.accuracy * (b.wins + b.losses)
-            return bScore - aScore
-          })
-          
-          if (sortedByAccuracy[0]) {
-            setBestBrain(sortedByAccuracy[0])
-          }
-          
-          // Replace dead brains with mutations of the best
-          const deadBrains = updatedBrains.filter(b => !b.isActive)
-          if (deadBrains.length > 0 && sortedByAccuracy[0]) {
-            const bestWeights = sortedByAccuracy[0].weights
-            
-            updatedBrains = updatedBrains.map(brain => {
-              if (brain.isActive) return brain
-              
-              const nn = new NeuralNetwork(bestWeights)
-              const mutatedWeights = nn.mutate(0.2)
-              
-              return {
-                ...brain,
-                id: `brain_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-                name: `Robo G${generation + 1}`,
-                generation: generation + 1,
-                lives: 10,
-                maxLives: 10,
-                predictions: [],
-                wins: 0,
-                losses: 0,
-                accuracy: 0,
-                weights: mutatedWeights,
-                isActive: true,
-                createdAt: Date.now(),
-                parentId: sortedByAccuracy[0].id,
-              }
-            })
-            
-            setGeneration(g => g + 1)
-          }
-          
-          return updatedBrains
-        })
-      }, 3000)
-      
-    }, 5000)
-    
-    return () => clearInterval(evolveInterval)
-  }, [isEvolutionMode, selectedAsset, marketData, brains.length, generation])
+          setEvolutionGeneration(newGen)
+        }
+        
+        return updatedBrains
+      })
+    }
+  }, [isEvolutionActive, selectedAsset, ticks, currentCandle, evolutionBrains.length, evolutionBrainCount, evolutionMaxLives, evolutionGeneration, candles1m, candles5m, candles15m, candles1h, trends, currentPrice])
   
   // Save/Load functions
-  const saveBrain = useCallback(() => {
+  const saveSimpleAI = useCallback(() => {
     const data = {
-      weights: neuralNetworkRef.current.weights,
-      predictions: predictions.slice(0, 50),
+      weights: simpleNNRef.current.weights,
+      generation: simpleAIGeneration,
+      history: simpleAIHistory.slice(0, 50),
       savedAt: Date.now(),
     }
     const blob = new Blob([JSON.stringify(data)], { type: "application/json" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = `ai_brain_${Date.now()}.json`
+    a.download = `ai_simple_g${simpleAIGeneration}_${Date.now()}.json`
     a.click()
     URL.revokeObjectURL(url)
-  }, [predictions])
+  }, [simpleAIGeneration, simpleAIHistory])
   
-  const loadBrain = useCallback(() => {
+  const loadSimpleAI = useCallback(() => {
     const input = document.createElement("input")
     input.type = "file"
     input.accept = ".json"
@@ -779,13 +748,12 @@ export default function AIAnalysisPage() {
           try {
             const data = JSON.parse(event.target?.result as string)
             if (data.weights) {
-              neuralNetworkRef.current.weights = data.weights
-              if (data.predictions) {
-                setPredictions(data.predictions)
-              }
+              simpleNNRef.current.weights = data.weights
+              setSimpleAIGeneration(data.generation || 1)
+              if (data.history) setSimpleAIHistory(data.history)
             }
           } catch (error) {
-            console.error("Error loading brain:", error)
+            console.error("Error loading:", error)
           }
         }
         reader.readAsText(file)
@@ -796,15 +764,11 @@ export default function AIAnalysisPage() {
   
   const saveBestBrain = useCallback(() => {
     if (!bestBrain) return
-    const data = {
-      ...bestBrain,
-      savedAt: Date.now(),
-    }
-    const blob = new Blob([JSON.stringify(data)], { type: "application/json" })
+    const blob = new Blob([JSON.stringify(bestBrain)], { type: "application/json" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = `best_brain_g${bestBrain.generation}_${Date.now()}.json`
+    a.download = `best_brain_g${bestBrain.generation}_acc${bestBrain.accuracy.toFixed(0)}_${Date.now()}.json`
     a.click()
     URL.revokeObjectURL(url)
   }, [bestBrain])
@@ -821,36 +785,37 @@ export default function AIAnalysisPage() {
           try {
             const data = JSON.parse(event.target?.result as string) as AIBrain
             if (data.weights) {
-              // Add loaded brain as the first brain
-              setBrains(prev => {
+              setEvolutionBrains(prev => {
                 const newBrains = [...prev]
-                newBrains[0] = {
-                  ...data,
-                  id: `loaded_${Date.now()}`,
-                  isActive: true,
-                  lives: 10,
-                  predictions: [],
+                if (newBrains.length > 0) {
+                  newBrains[0] = {
+                    ...data,
+                    id: `loaded_${Date.now()}`,
+                    isActive: true,
+                    lives: evolutionMaxLives,
+                    currentPrediction: null,
+                  }
                 }
                 return newBrains
               })
             }
           } catch (error) {
-            console.error("Error loading brain:", error)
+            console.error("Error loading:", error)
           }
         }
         reader.readAsText(file)
       }
     }
     input.click()
-  }, [])
+  }, [evolutionMaxLives])
   
-  // Calculate statistics
-  const aiStats = {
-    totalPredictions: predictions.length,
-    wins: predictions.filter(p => p.result === "win").length,
-    losses: predictions.filter(p => p.result === "loss").length,
-    accuracy: predictions.length > 0 
-      ? (predictions.filter(p => p.result === "win").length / predictions.filter(p => p.result !== "pending").length) * 100 
+  // Stats
+  const simpleAIStats = {
+    total: simpleAIHistory.length,
+    wins: simpleAIHistory.filter(p => p.result === "win").length,
+    losses: simpleAIHistory.filter(p => p.result === "loss").length,
+    accuracy: simpleAIHistory.length > 0 
+      ? (simpleAIHistory.filter(p => p.result === "win").length / simpleAIHistory.length) * 100 
       : 0,
   }
   
@@ -858,7 +823,7 @@ export default function AIAnalysisPage() {
   
   return (
     <AppLayout>
-      <div className="space-y-6 p-6">
+      <div className="space-y-6 p-4 md:p-6">
         {/* Header */}
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
@@ -867,24 +832,22 @@ export default function AIAnalysisPage() {
               Analise com IA
             </h1>
             <p className="text-muted-foreground">
-              Analise tecnica avancada com inteligencia artificial
+              Analise tecnica e previsao com inteligencia artificial
             </p>
           </div>
           
-          <div className="flex items-center gap-3">
-            <Select value={selectedAsset} onValueChange={setSelectedAsset}>
-              <SelectTrigger className="w-[200px] bg-secondary border-border">
-                <SelectValue placeholder="Selecione o ativo" />
-              </SelectTrigger>
-              <SelectContent>
-                {syntheticAssets.map((asset) => (
-                  <SelectItem key={asset.symbol} value={asset.symbol}>
-                    {asset.display_name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <Select value={selectedAsset} onValueChange={setSelectedAsset}>
+            <SelectTrigger className="w-[200px] bg-card border-border">
+              <SelectValue placeholder="Selecione o ativo" />
+            </SelectTrigger>
+            <SelectContent>
+              {syntheticAssets.map((asset) => (
+                <SelectItem key={asset.symbol} value={asset.symbol}>
+                  {asset.display_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         
         {!selectedAsset ? (
@@ -893,145 +856,144 @@ export default function AIAnalysisPage() {
               <Target className="h-16 w-16 text-muted-foreground mb-4" />
               <h2 className="text-xl font-semibold text-foreground mb-2">Selecione um Ativo</h2>
               <p className="text-muted-foreground text-center max-w-md">
-                Escolha um ativo sintetico para iniciar a analise tecnica e ativar a inteligencia artificial
+                Escolha um ativo sintetico para iniciar a analise
               </p>
             </CardContent>
           </Card>
         ) : (
           <>
-            {/* Market Overview */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <Card className="bg-card border-border">
-                <CardContent className="pt-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Preco Atual</span>
-                    <Activity className="h-4 w-4 text-primary" />
+            {/* Current Candle Display */}
+            <Card className="bg-card border-border">
+              <CardContent className="pt-4">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <CandlestickChart className="h-6 w-6 text-primary" />
+                      <span className="font-medium text-foreground">Vela Atual (1m)</span>
+                    </div>
+                    {currentCandle && (
+                      <div className={cn(
+                        "flex items-center gap-2 px-4 py-2 rounded-lg",
+                        currentCandle.direction === "up" ? "bg-success/20" : "bg-destructive/20"
+                      )}>
+                        {currentCandle.direction === "up" ? (
+                          <ArrowUp className="h-5 w-5 text-success" />
+                        ) : (
+                          <ArrowDown className="h-5 w-5 text-destructive" />
+                        )}
+                        <span className={cn(
+                          "text-lg font-bold",
+                          currentCandle.direction === "up" ? "text-success" : "text-destructive"
+                        )}>
+                          {currentCandle.direction === "up" ? "ALTA" : "BAIXA"}
+                        </span>
+                      </div>
+                    )}
                   </div>
-                  <p className="text-2xl font-bold text-foreground mt-1">
-                    {marketData.currentPrice.toFixed(2)}
-                  </p>
-                  <p className="text-xs text-muted-foreground">{selectedAssetInfo?.display_name}</p>
-                </CardContent>
-              </Card>
-              
-              <Card className="bg-card border-border">
-                <CardContent className="pt-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Maxima</span>
-                    <TrendingUp className="h-4 w-4 text-success" />
+                  
+                  <div className="flex items-center gap-6 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">Abertura:</span>
+                      <span className="ml-2 font-mono text-foreground">{currentCandle?.open.toFixed(2)}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Atual:</span>
+                      <span className="ml-2 font-mono text-foreground font-bold">{currentPrice.toFixed(2)}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Max:</span>
+                      <span className="ml-2 font-mono text-success">{currentCandle?.high.toFixed(2)}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Min:</span>
+                      <span className="ml-2 font-mono text-destructive">{currentCandle?.low.toFixed(2)}</span>
+                    </div>
                   </div>
-                  <p className="text-2xl font-bold text-success mt-1">
-                    {marketData.highPrice.toFixed(2)}
-                  </p>
-                </CardContent>
-              </Card>
-              
-              <Card className="bg-card border-border">
-                <CardContent className="pt-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Minima</span>
-                    <TrendingDown className="h-4 w-4 text-destructive" />
-                  </div>
-                  <p className="text-2xl font-bold text-destructive mt-1">
-                    {marketData.lowPrice.toFixed(2)}
-                  </p>
-                </CardContent>
-              </Card>
-              
-              <Card className="bg-card border-border">
-                <CardContent className="pt-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Variacao</span>
-                    <BarChart3 className="h-4 w-4 text-primary" />
-                  </div>
-                  <p className={cn(
-                    "text-2xl font-bold mt-1",
-                    marketData.currentPrice >= marketData.openPrice ? "text-success" : "text-destructive"
-                  )}>
-                    {((marketData.currentPrice - marketData.openPrice) / marketData.openPrice * 100).toFixed(2)}%
-                  </p>
-                </CardContent>
-              </Card>
-            </div>
+                </div>
+              </CardContent>
+            </Card>
             
-            {/* Main Content */}
+            {/* Tabs */}
             <Tabs defaultValue="analysis" className="space-y-4">
-              <TabsList className="bg-secondary">
+              <TabsList className="bg-secondary grid w-full grid-cols-3">
                 <TabsTrigger value="analysis">Analise Tecnica</TabsTrigger>
-                <TabsTrigger value="ai">IA Simples</TabsTrigger>
+                <TabsTrigger value="simple">IA Simples</TabsTrigger>
                 <TabsTrigger value="evolution">Evolucao Genetica</TabsTrigger>
               </TabsList>
               
               {/* Analysis Tab */}
               <TabsContent value="analysis" className="space-y-4">
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {/* Trend Analysis */}
+                  {/* Trends */}
                   <Card className="bg-card border-border">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <TrendingUp className="h-5 w-5 text-primary" />
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <TrendingUp className="h-4 w-4 text-primary" />
                         Tendencias por Periodo
                       </CardTitle>
-                      <CardDescription>Analise de tendencia em diferentes timeframes</CardDescription>
                     </CardHeader>
-                    <CardContent className="space-y-4">
+                    <CardContent className="space-y-3">
                       {Object.entries(trends).map(([period, trend]) => (
-                        <div key={period} className="space-y-2">
-                          <div className="flex items-center justify-between">
+                        <div key={period} className="p-3 rounded-lg bg-secondary/30">
+                          <div className="flex items-center justify-between mb-2">
                             <span className="font-medium text-foreground">{period}</span>
                             <Badge
-                              variant={trend.direction === "up" ? "default" : trend.direction === "down" ? "destructive" : "secondary"}
                               className={cn(
                                 trend.direction === "up" && "bg-success text-success-foreground",
+                                trend.direction === "down" && "bg-destructive text-destructive-foreground",
+                                trend.direction === "lateral" && "bg-secondary text-secondary-foreground"
                               )}
                             >
+                              {trend.direction === "up" && <ArrowUp className="h-3 w-3 mr-1" />}
+                              {trend.direction === "down" && <ArrowDown className="h-3 w-3 mr-1" />}
+                              {trend.direction === "lateral" && <Minus className="h-3 w-3 mr-1" />}
                               {trend.direction === "up" ? "Alta" : trend.direction === "down" ? "Baixa" : "Lateral"}
-                              {trend.direction === "up" ? <TrendingUp className="h-3 w-3 ml-1" /> : 
-                               trend.direction === "down" ? <TrendingDown className="h-3 w-3 ml-1" /> : null}
                             </Badge>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-muted-foreground w-16">Forca:</span>
-                            <Progress value={trend.strength} className="flex-1 h-2" />
-                            <span className="text-xs text-muted-foreground w-10">{trend.strength.toFixed(0)}%</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-muted-foreground w-16">Confianca:</span>
-                            <Progress value={trend.confidence} className="flex-1 h-2" />
-                            <span className="text-xs text-muted-foreground w-10">{trend.confidence.toFixed(0)}%</span>
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-muted-foreground w-14">Forca</span>
+                              <Progress value={trend.strength} className="flex-1 h-1.5" />
+                              <span className="text-xs text-muted-foreground w-8">{trend.strength.toFixed(0)}%</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-muted-foreground w-14">Confianca</span>
+                              <Progress value={trend.confidence} className="flex-1 h-1.5" />
+                              <span className="text-xs text-muted-foreground w-8">{trend.confidence.toFixed(0)}%</span>
+                            </div>
                           </div>
                         </div>
                       ))}
                     </CardContent>
                   </Card>
                   
-                  {/* Technical Indicators */}
+                  {/* Indicators */}
                   <Card className="bg-card border-border">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <BarChart3 className="h-5 w-5 text-primary" />
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <BarChart3 className="h-4 w-4 text-primary" />
                         Indicadores Tecnicos
                       </CardTitle>
-                      <CardDescription>Principais indicadores de mercado</CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <div className="space-y-3">
-                        {indicators.map((indicator) => (
-                          <div key={indicator.name} className="flex items-center justify-between p-3 rounded-lg bg-secondary/50">
+                      <div className="space-y-2">
+                        {indicators.map((ind) => (
+                          <div key={ind.name} className="flex items-center justify-between p-2 rounded bg-secondary/30">
                             <div>
-                              <p className="font-medium text-foreground">{indicator.name}</p>
-                              <p className="text-xs text-muted-foreground">{indicator.description}</p>
+                              <p className="font-medium text-sm text-foreground">{ind.name}</p>
+                              <p className="text-xs text-muted-foreground">{ind.description}</p>
                             </div>
                             <div className="text-right">
-                              <p className="font-mono text-foreground">{indicator.value.toFixed(2)}</p>
+                              <p className="font-mono text-sm text-foreground">{ind.value.toFixed(2)}</p>
                               <Badge
-                                variant={indicator.signal === "buy" ? "default" : indicator.signal === "sell" ? "destructive" : "secondary"}
+                                variant="outline"
                                 className={cn(
                                   "text-xs",
-                                  indicator.signal === "buy" && "bg-success text-success-foreground"
+                                  ind.signal === "buy" && "border-success text-success",
+                                  ind.signal === "sell" && "border-destructive text-destructive"
                                 )}
                               >
-                                {indicator.signal === "buy" ? "Compra" : indicator.signal === "sell" ? "Venda" : "Neutro"}
+                                {ind.signal === "buy" ? "Compra" : ind.signal === "sell" ? "Venda" : "Neutro"}
                               </Badge>
                             </div>
                           </div>
@@ -1042,51 +1004,39 @@ export default function AIAnalysisPage() {
                   
                   {/* Support/Resistance */}
                   <Card className="bg-card border-border lg:col-span-2">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <Target className="h-5 w-5 text-primary" />
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Target className="h-4 w-4 text-primary" />
                         Suportes e Resistencias
                       </CardTitle>
-                      <CardDescription>Niveis importantes de preco identificados</CardDescription>
                     </CardHeader>
                     <CardContent>
                       <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <h4 className="font-medium text-success mb-2 flex items-center gap-2">
-                            <TrendingDown className="h-4 w-4" /> Suportes
-                          </h4>
-                          <div className="space-y-2">
+                          <h4 className="font-medium text-success mb-2 text-sm">Suportes</h4>
+                          <div className="space-y-1">
                             {supportResistance.filter(sr => sr.type === "support").slice(0, 3).map((level, i) => (
-                              <div key={i} className="flex items-center justify-between p-2 rounded bg-success/10 border border-success/20">
+                              <div key={i} className="flex items-center justify-between p-2 rounded bg-success/10 text-sm">
                                 <span className="font-mono text-success">{level.price.toFixed(2)}</span>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs text-muted-foreground">Forca: {level.strength}</span>
-                                  {level.active && <Badge className="bg-success/20 text-success text-xs">Ativo</Badge>}
-                                </div>
+                                <span className="text-xs text-muted-foreground">Forca: {level.strength}</span>
                               </div>
                             ))}
                             {supportResistance.filter(sr => sr.type === "support").length === 0 && (
-                              <p className="text-sm text-muted-foreground">Nenhum suporte identificado</p>
+                              <p className="text-xs text-muted-foreground">Nenhum identificado</p>
                             )}
                           </div>
                         </div>
-                        
                         <div>
-                          <h4 className="font-medium text-destructive mb-2 flex items-center gap-2">
-                            <TrendingUp className="h-4 w-4" /> Resistencias
-                          </h4>
-                          <div className="space-y-2">
+                          <h4 className="font-medium text-destructive mb-2 text-sm">Resistencias</h4>
+                          <div className="space-y-1">
                             {supportResistance.filter(sr => sr.type === "resistance").slice(0, 3).map((level, i) => (
-                              <div key={i} className="flex items-center justify-between p-2 rounded bg-destructive/10 border border-destructive/20">
+                              <div key={i} className="flex items-center justify-between p-2 rounded bg-destructive/10 text-sm">
                                 <span className="font-mono text-destructive">{level.price.toFixed(2)}</span>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs text-muted-foreground">Forca: {level.strength}</span>
-                                  {level.active && <Badge className="bg-destructive/20 text-destructive text-xs">Ativo</Badge>}
-                                </div>
+                                <span className="text-xs text-muted-foreground">Forca: {level.strength}</span>
                               </div>
                             ))}
                             {supportResistance.filter(sr => sr.type === "resistance").length === 0 && (
-                              <p className="text-sm text-muted-foreground">Nenhuma resistencia identificada</p>
+                              <p className="text-xs text-muted-foreground">Nenhum identificado</p>
                             )}
                           </div>
                         </div>
@@ -1096,356 +1046,434 @@ export default function AIAnalysisPage() {
                 </div>
               </TabsContent>
               
-              {/* AI Tab */}
-              <TabsContent value="ai" className="space-y-4">
-                {/* AI Controls */}
-                <Card className="bg-card border-border">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Brain className="h-5 w-5 text-primary" />
-                      Controles da IA
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex flex-wrap gap-3">
-                      <Button
-                        onClick={() => setIsAIActive(!isAIActive)}
-                        variant={isAIActive ? "destructive" : "default"}
-                        className={cn(!isAIActive && "bg-primary hover:bg-primary/90")}
-                      >
-                        {isAIActive ? <Pause className="h-4 w-4 mr-2" /> : <Play className="h-4 w-4 mr-2" />}
-                        {isAIActive ? "Parar Analise" : "Iniciar Analise"}
-                      </Button>
-                      
-                      <Button
-                        onClick={() => setIsTraining(!isTraining)}
-                        variant={isTraining ? "secondary" : "outline"}
-                        disabled={!isAIActive}
-                      >
-                        <Sparkles className="h-4 w-4 mr-2" />
-                        {isTraining ? "Treinando..." : "Treinar IA"}
-                      </Button>
-                      
-                      <Button onClick={saveBrain} variant="outline">
-                        <Save className="h-4 w-4 mr-2" />
-                        Salvar Robo
-                      </Button>
-                      
-                      <Button onClick={loadBrain} variant="outline">
-                        <Upload className="h-4 w-4 mr-2" />
-                        Carregar Robo
-                      </Button>
-                      
-                      <Button
-                        onClick={() => {
-                          neuralNetworkRef.current = new NeuralNetwork()
-                          setPredictions([])
-                        }}
-                        variant="outline"
-                      >
-                        <RotateCcw className="h-4 w-4 mr-2" />
-                        Resetar
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-                
-                {/* AI Stats */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {/* Simple AI Tab */}
+              <TabsContent value="simple" className="space-y-4">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  {/* Config */}
                   <Card className="bg-card border-border">
-                    <CardContent className="pt-4">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-muted-foreground">Previsoes</span>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Settings2 className="h-4 w-4 text-primary" />
+                        Configuracao
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="space-y-2">
+                        <Label className="text-sm">Vidas Maximas</Label>
+                        <div className="flex items-center gap-2">
+                          <Slider
+                            value={[simpleAIMaxLives]}
+                            onValueChange={([v]) => setSimpleAIMaxLives(v)}
+                            min={1}
+                            max={50}
+                            step={1}
+                            disabled={isSimpleAIActive}
+                            className="flex-1"
+                          />
+                          <span className="w-8 text-sm font-mono">{simpleAIMaxLives}</span>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <Label className="text-sm">Velas para primeira decisao</Label>
+                        <div className="flex items-center gap-2">
+                          <Slider
+                            value={[candlesToWait]}
+                            onValueChange={([v]) => setCandlesToWait(v)}
+                            min={1}
+                            max={10}
+                            step={1}
+                            disabled={isSimpleAIActive}
+                            className="flex-1"
+                          />
+                          <span className="w-8 text-sm font-mono">{candlesToWait}</span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          variant={isSimpleAIActive ? "destructive" : "default"}
+                          onClick={() => {
+                            if (!isSimpleAIActive) {
+                              setSimpleAILives(simpleAIMaxLives)
+                              setCandleCount(0)
+                              setSimpleAIPrediction(null)
+                            }
+                            setIsSimpleAIActive(!isSimpleAIActive)
+                          }}
+                        >
+                          {isSimpleAIActive ? <Pause className="h-4 w-4 mr-1" /> : <Play className="h-4 w-4 mr-1" />}
+                          {isSimpleAIActive ? "Parar" : "Iniciar"}
+                        </Button>
+                        
+                        <Button
+                          size="sm"
+                          variant={isSimpleAITraining ? "secondary" : "outline"}
+                          onClick={() => setIsSimpleAITraining(!isSimpleAITraining)}
+                        >
+                          <Brain className="h-4 w-4 mr-1" />
+                          {isSimpleAITraining ? "Treinando" : "Treinar"}
+                        </Button>
+                        
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            simpleNNRef.current = new NeuralNetwork()
+                            setSimpleAIGeneration(1)
+                            setSimpleAIHistory([])
+                            setSimpleAIPrediction(null)
+                            setSimpleAILives(simpleAIMaxLives)
+                          }}
+                        >
+                          <RotateCcw className="h-4 w-4 mr-1" />
+                          Reset
+                        </Button>
+                      </div>
+                      
+                      <div className="flex gap-2 pt-2 border-t border-border">
+                        <Button size="sm" variant="outline" onClick={saveSimpleAI} className="flex-1">
+                          <Save className="h-4 w-4 mr-1" />
+                          Salvar
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={loadSimpleAI} className="flex-1">
+                          <Upload className="h-4 w-4 mr-1" />
+                          Carregar
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                  
+                  {/* Current Prediction */}
+                  <Card className="bg-card border-border">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base flex items-center gap-2">
                         <Brain className="h-4 w-4 text-primary" />
+                        Previsao da IA
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-muted-foreground">Geracao:</span>
+                          <Badge variant="secondary">{simpleAIGeneration}</Badge>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {Array.from({ length: simpleAIMaxLives }).map((_, i) => (
+                            <Heart
+                              key={i}
+                              className={cn(
+                                "h-4 w-4",
+                                i < simpleAILives ? "text-destructive fill-destructive" : "text-muted-foreground"
+                              )}
+                            />
+                          ))}
+                        </div>
                       </div>
-                      <p className="text-2xl font-bold text-foreground mt-1">{aiStats.totalPredictions}</p>
+                      
+                      {simpleAIPrediction ? (
+                        <div className={cn(
+                          "p-4 rounded-lg text-center",
+                          simpleAIPrediction.direction === "CALL" ? "bg-success/20" : "bg-destructive/20"
+                        )}>
+                          <div className="text-xs text-muted-foreground mb-1">Proxima vela sera</div>
+                          <div className={cn(
+                            "text-3xl font-bold flex items-center justify-center gap-2",
+                            simpleAIPrediction.direction === "CALL" ? "text-success" : "text-destructive"
+                          )}>
+                            {simpleAIPrediction.direction === "CALL" ? (
+                              <ArrowUp className="h-8 w-8" />
+                            ) : (
+                              <ArrowDown className="h-8 w-8" />
+                            )}
+                            {simpleAIPrediction.direction === "CALL" ? "ALTA" : "BAIXA"}
+                          </div>
+                          <div className="text-sm text-muted-foreground mt-2">
+                            Confianca: {simpleAIPrediction.confidence.toFixed(1)}%
+                          </div>
+                          <div className="text-xs text-muted-foreground mt-1">
+                            Entrada: {simpleAIPrediction.entryPrice.toFixed(2)}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-4 rounded-lg bg-secondary/30 text-center">
+                          <Clock className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+                          <p className="text-sm text-muted-foreground">
+                            {isSimpleAIActive 
+                              ? `Aguardando ${candlesToWait - candleCount} vela(s)...`
+                              : "IA inativa"}
+                          </p>
+                        </div>
+                      )}
+                      
+                      <div className="grid grid-cols-3 gap-2 mt-4 text-center">
+                        <div className="p-2 rounded bg-secondary/30">
+                          <div className="text-lg font-bold text-foreground">{simpleAIStats.total}</div>
+                          <div className="text-xs text-muted-foreground">Total</div>
+                        </div>
+                        <div className="p-2 rounded bg-success/10">
+                          <div className="text-lg font-bold text-success">{simpleAIStats.wins}</div>
+                          <div className="text-xs text-muted-foreground">Acertos</div>
+                        </div>
+                        <div className="p-2 rounded bg-destructive/10">
+                          <div className="text-lg font-bold text-destructive">{simpleAIStats.losses}</div>
+                          <div className="text-xs text-muted-foreground">Erros</div>
+                        </div>
+                      </div>
+                      
+                      <div className="mt-4">
+                        <div className="flex items-center justify-between text-sm mb-1">
+                          <span className="text-muted-foreground">Precisao</span>
+                          <span className="font-bold text-foreground">{simpleAIStats.accuracy.toFixed(1)}%</span>
+                        </div>
+                        <Progress value={simpleAIStats.accuracy} className="h-2" />
+                      </div>
                     </CardContent>
                   </Card>
                   
+                  {/* History */}
                   <Card className="bg-card border-border">
-                    <CardContent className="pt-4">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-muted-foreground">Acertos</span>
-                        <CheckCircle2 className="h-4 w-4 text-success" />
-                      </div>
-                      <p className="text-2xl font-bold text-success mt-1">{aiStats.wins}</p>
-                    </CardContent>
-                  </Card>
-                  
-                  <Card className="bg-card border-border">
-                    <CardContent className="pt-4">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-muted-foreground">Erros</span>
-                        <XCircle className="h-4 w-4 text-destructive" />
-                      </div>
-                      <p className="text-2xl font-bold text-destructive mt-1">{aiStats.losses}</p>
-                    </CardContent>
-                  </Card>
-                  
-                  <Card className="bg-card border-border">
-                    <CardContent className="pt-4">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-muted-foreground">Precisao</span>
-                        <Target className="h-4 w-4 text-primary" />
-                      </div>
-                      <p className="text-2xl font-bold text-foreground mt-1">{aiStats.accuracy.toFixed(1)}%</p>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Activity className="h-4 w-4 text-primary" />
+                        Historico
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <ScrollArea className="h-[300px]">
+                        <div className="space-y-2">
+                          {simpleAIHistory.slice(0, 20).map((pred) => (
+                            <div
+                              key={pred.id}
+                              className={cn(
+                                "p-2 rounded text-sm flex items-center justify-between",
+                                pred.result === "win" ? "bg-success/10" : "bg-destructive/10"
+                              )}
+                            >
+                              <div className="flex items-center gap-2">
+                                {pred.result === "win" ? (
+                                  <CheckCircle2 className="h-4 w-4 text-success" />
+                                ) : (
+                                  <XCircle className="h-4 w-4 text-destructive" />
+                                )}
+                                <span className={pred.direction === "CALL" ? "text-success" : "text-destructive"}>
+                                  {pred.direction}
+                                </span>
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                {pred.entryPrice.toFixed(2)} → {pred.exitPrice?.toFixed(2)}
+                              </div>
+                            </div>
+                          ))}
+                          {simpleAIHistory.length === 0 && (
+                            <p className="text-sm text-muted-foreground text-center py-4">
+                              Nenhuma previsao ainda
+                            </p>
+                          )}
+                        </div>
+                      </ScrollArea>
                     </CardContent>
                   </Card>
                 </div>
-                
-                {/* Current Prediction */}
-                {currentPrediction && (
-                  <Card className={cn(
-                    "border-2",
-                    currentPrediction.direction === "CALL" ? "border-success bg-success/5" : "border-destructive bg-destructive/5"
-                  )}>
-                    <CardContent className="pt-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className={cn(
-                            "p-3 rounded-full",
-                            currentPrediction.direction === "CALL" ? "bg-success/20" : "bg-destructive/20"
-                          )}>
-                            {currentPrediction.direction === "CALL" ? 
-                              <TrendingUp className="h-6 w-6 text-success" /> : 
-                              <TrendingDown className="h-6 w-6 text-destructive" />
-                            }
-                          </div>
-                          <div>
-                            <p className="text-lg font-bold text-foreground">
-                              Previsao: {currentPrediction.direction}
-                            </p>
-                            <p className="text-sm text-muted-foreground">
-                              Entrada: {currentPrediction.entryPrice.toFixed(2)}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm text-muted-foreground">Confianca</p>
-                          <p className="text-xl font-bold text-foreground">{currentPrediction.confidence.toFixed(0)}%</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Clock className="h-4 w-4 text-warning animate-pulse" />
-                          <span className="text-warning">Aguardando...</span>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                )}
-                
-                {/* Predictions History */}
-                <Card className="bg-card border-border">
-                  <CardHeader>
-                    <CardTitle>Historico de Previsoes</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ScrollArea className="h-[300px]">
-                      <div className="space-y-2">
-                        {predictions.slice(0, 50).map((pred) => (
-                          <div
-                            key={pred.id}
-                            className={cn(
-                              "flex items-center justify-between p-3 rounded-lg",
-                              pred.result === "win" ? "bg-success/10" : pred.result === "loss" ? "bg-destructive/10" : "bg-secondary"
-                            )}
-                          >
-                            <div className="flex items-center gap-3">
-                              {pred.result === "win" ? (
-                                <CheckCircle2 className="h-5 w-5 text-success" />
-                              ) : pred.result === "loss" ? (
-                                <XCircle className="h-5 w-5 text-destructive" />
-                              ) : (
-                                <Clock className="h-5 w-5 text-warning" />
-                              )}
-                              <div>
-                                <p className="font-medium text-foreground">{pred.direction}</p>
-                                <p className="text-xs text-muted-foreground">
-                                  {new Date(pred.timestamp).toLocaleTimeString()}
-                                </p>
-                              </div>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-sm text-foreground">
-                                {pred.entryPrice.toFixed(2)} → {pred.exitPrice?.toFixed(2) || "..."}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                Confianca: {pred.confidence.toFixed(0)}%
-                              </p>
-                            </div>
-                          </div>
-                        ))}
-                        {predictions.length === 0 && (
-                          <div className="text-center py-8 text-muted-foreground">
-                            Nenhuma previsao ainda. Inicie a analise da IA.
-                          </div>
-                        )}
-                      </div>
-                    </ScrollArea>
-                  </CardContent>
-                </Card>
               </TabsContent>
               
               {/* Evolution Tab */}
               <TabsContent value="evolution" className="space-y-4">
-                {/* Evolution Controls */}
+                {/* Config Bar */}
                 <Card className="bg-card border-border">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Dna className="h-5 w-5 text-primary" />
-                      Evolucao Genetica
-                    </CardTitle>
-                    <CardDescription>
-                      Multiplos robos competem e evoluem. Cada robo tem 10 vidas. Erros eliminam robos, que sao recriados a partir dos melhores.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex flex-wrap gap-3">
+                  <CardContent className="pt-4">
+                    <div className="flex flex-wrap items-end gap-4">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Quantidade de IAs</Label>
+                        <Input
+                          type="number"
+                          value={evolutionBrainCount}
+                          onChange={(e) => setEvolutionBrainCount(Math.max(2, Math.min(20, parseInt(e.target.value) || 10)))}
+                          disabled={isEvolutionActive}
+                          className="w-20 h-8"
+                        />
+                      </div>
+                      
+                      <div className="space-y-1">
+                        <Label className="text-xs">Vidas por IA</Label>
+                        <Input
+                          type="number"
+                          value={evolutionMaxLives}
+                          onChange={(e) => setEvolutionMaxLives(Math.max(1, Math.min(50, parseInt(e.target.value) || 10)))}
+                          disabled={isEvolutionActive}
+                          className="w-20 h-8"
+                        />
+                      </div>
+                      
                       <Button
+                        size="sm"
+                        variant={isEvolutionActive ? "destructive" : "default"}
                         onClick={() => {
-                          setIsEvolutionMode(!isEvolutionMode)
-                          if (!isEvolutionMode) {
-                            setBrains([])
-                            setGeneration(1)
+                          if (!isEvolutionActive) {
+                            setEvolutionBrains([])
+                            setEvolutionGeneration(1)
                             setBestBrain(null)
                           }
+                          setIsEvolutionActive(!isEvolutionActive)
                         }}
-                        variant={isEvolutionMode ? "destructive" : "default"}
-                        className={cn(!isEvolutionMode && "bg-primary hover:bg-primary/90")}
                       >
-                        {isEvolutionMode ? <Pause className="h-4 w-4 mr-2" /> : <Play className="h-4 w-4 mr-2" />}
-                        {isEvolutionMode ? "Parar Evolucao" : "Iniciar Evolucao"}
+                        {isEvolutionActive ? <Pause className="h-4 w-4 mr-1" /> : <Play className="h-4 w-4 mr-1" />}
+                        {isEvolutionActive ? "Parar" : "Iniciar"}
                       </Button>
                       
-                      <Button onClick={saveBestBrain} variant="outline" disabled={!bestBrain}>
-                        <Crown className="h-4 w-4 mr-2" />
-                        Salvar Melhor Robo
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setEvolutionBrains([])
+                          setEvolutionGeneration(1)
+                          setBestBrain(null)
+                          setIsEvolutionActive(false)
+                        }}
+                      >
+                        <RotateCcw className="h-4 w-4 mr-1" />
+                        Reset
                       </Button>
                       
-                      <Button onClick={loadEvolutionBrain} variant="outline">
-                        <Upload className="h-4 w-4 mr-2" />
-                        Carregar Robo
-                      </Button>
-                      
-                      <div className="flex items-center gap-2 ml-auto">
-                        <Badge variant="secondary" className="text-lg px-4 py-2">
-                          Geracao: {generation}
-                        </Badge>
+                      <div className="flex gap-2 ml-auto">
+                        <Button size="sm" variant="outline" onClick={saveBestBrain} disabled={!bestBrain}>
+                          <Save className="h-4 w-4 mr-1" />
+                          Salvar Melhor
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={loadEvolutionBrain}>
+                          <Upload className="h-4 w-4 mr-1" />
+                          Carregar
+                        </Button>
                       </div>
                     </div>
                   </CardContent>
                 </Card>
                 
-                {/* Best Brain */}
-                {bestBrain && (
-                  <Card className="bg-gradient-to-r from-yellow-500/10 to-orange-500/10 border-yellow-500/30">
-                    <CardContent className="pt-4">
-                      <div className="flex items-center gap-4">
-                        <div className="p-3 rounded-full bg-yellow-500/20">
-                          <Crown className="h-8 w-8 text-yellow-500" />
-                        </div>
-                        <div className="flex-1">
-                          <p className="text-lg font-bold text-foreground">Melhor Robo: {bestBrain.name}</p>
-                          <p className="text-sm text-muted-foreground">Geracao {bestBrain.generation}</p>
-                        </div>
-                        <div className="grid grid-cols-3 gap-6 text-center">
-                          <div>
-                            <p className="text-2xl font-bold text-success">{bestBrain.wins}</p>
-                            <p className="text-xs text-muted-foreground">Acertos</p>
-                          </div>
-                          <div>
-                            <p className="text-2xl font-bold text-destructive">{bestBrain.losses}</p>
-                            <p className="text-xs text-muted-foreground">Erros</p>
-                          </div>
-                          <div>
-                            <p className="text-2xl font-bold text-primary">{bestBrain.accuracy.toFixed(1)}%</p>
-                            <p className="text-xs text-muted-foreground">Precisao</p>
-                          </div>
-                        </div>
-                      </div>
+                {/* Stats */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <Card className="bg-card border-border">
+                    <CardContent className="pt-4 text-center">
+                      <Dna className="h-6 w-6 text-primary mx-auto mb-1" />
+                      <div className="text-2xl font-bold text-foreground">{evolutionGeneration}</div>
+                      <div className="text-xs text-muted-foreground">Geracao</div>
                     </CardContent>
                   </Card>
-                )}
+                  
+                  <Card className="bg-card border-border">
+                    <CardContent className="pt-4 text-center">
+                      <Brain className="h-6 w-6 text-primary mx-auto mb-1" />
+                      <div className="text-2xl font-bold text-foreground">
+                        {evolutionBrains.filter(b => b.isActive).length}
+                      </div>
+                      <div className="text-xs text-muted-foreground">IAs Ativas</div>
+                    </CardContent>
+                  </Card>
+                  
+                  <Card className="bg-card border-border">
+                    <CardContent className="pt-4 text-center">
+                      <Crown className="h-6 w-6 text-yellow-500 mx-auto mb-1" />
+                      <div className="text-2xl font-bold text-foreground">
+                        {bestBrain?.accuracy.toFixed(1) || 0}%
+                      </div>
+                      <div className="text-xs text-muted-foreground">Melhor Precisao</div>
+                    </CardContent>
+                  </Card>
+                  
+                  <Card className="bg-card border-border">
+                    <CardContent className="pt-4 text-center">
+                      <Target className="h-6 w-6 text-primary mx-auto mb-1" />
+                      <div className="text-2xl font-bold text-foreground">
+                        {bestBrain ? bestBrain.wins + bestBrain.losses : 0}
+                      </div>
+                      <div className="text-xs text-muted-foreground">Total Operacoes</div>
+                    </CardContent>
+                  </Card>
+                </div>
                 
                 {/* Brains Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-                  {brains.map((brain) => (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                  {evolutionBrains.map((brain) => (
                     <Card
                       key={brain.id}
                       className={cn(
-                        "border-border transition-all",
+                        "bg-card border-border transition-all",
                         !brain.isActive && "opacity-50",
                         bestBrain?.id === brain.id && "ring-2 ring-yellow-500"
                       )}
                     >
-                      <CardContent className="pt-4 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            {brain.isActive ? (
-                              <Zap className="h-4 w-4 text-primary" />
-                            ) : (
-                              <Skull className="h-4 w-4 text-destructive" />
-                            )}
-                            <span className="font-medium text-foreground text-sm">{brain.name}</span>
-                          </div>
-                          <Badge variant="secondary" className="text-xs">G{brain.generation}</Badge>
+                      <CardContent className="pt-3 pb-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm font-medium text-foreground truncate">
+                            {brain.name}
+                          </span>
+                          {bestBrain?.id === brain.id && (
+                            <Crown className="h-4 w-4 text-yellow-500" />
+                          )}
+                          {!brain.isActive && (
+                            <Skull className="h-4 w-4 text-muted-foreground" />
+                          )}
                         </div>
                         
-                        {/* Lives */}
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-0.5 mb-2">
                           {Array.from({ length: brain.maxLives }).map((_, i) => (
                             <Heart
                               key={i}
                               className={cn(
                                 "h-3 w-3",
-                                i < brain.lives ? "text-destructive fill-destructive" : "text-muted-foreground"
+                                i < brain.lives ? "text-destructive fill-destructive" : "text-muted-foreground/30"
                               )}
                             />
                           ))}
                         </div>
                         
-                        {/* Stats */}
-                        <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                          <div className="bg-success/10 rounded p-1">
-                            <p className="font-bold text-success">{brain.wins}</p>
-                            <p className="text-muted-foreground">Win</p>
+                        {brain.currentPrediction && (
+                          <div className={cn(
+                            "p-1.5 rounded text-center mb-2",
+                            brain.currentPrediction.direction === "CALL" ? "bg-success/20" : "bg-destructive/20"
+                          )}>
+                            <div className={cn(
+                              "text-sm font-bold flex items-center justify-center gap-1",
+                              brain.currentPrediction.direction === "CALL" ? "text-success" : "text-destructive"
+                            )}>
+                              {brain.currentPrediction.direction === "CALL" ? (
+                                <ArrowUp className="h-3 w-3" />
+                              ) : (
+                                <ArrowDown className="h-3 w-3" />
+                              )}
+                              {brain.currentPrediction.direction === "CALL" ? "ALTA" : "BAIXA"}
+                            </div>
                           </div>
-                          <div className="bg-destructive/10 rounded p-1">
-                            <p className="font-bold text-destructive">{brain.losses}</p>
-                            <p className="text-muted-foreground">Loss</p>
+                        )}
+                        
+                        <div className="grid grid-cols-2 gap-1 text-xs">
+                          <div className="text-center p-1 rounded bg-success/10">
+                            <div className="font-bold text-success">{brain.wins}</div>
+                            <div className="text-muted-foreground">Win</div>
                           </div>
-                          <div className="bg-primary/10 rounded p-1">
-                            <p className="font-bold text-primary">{brain.accuracy.toFixed(0)}%</p>
-                            <p className="text-muted-foreground">Taxa</p>
+                          <div className="text-center p-1 rounded bg-destructive/10">
+                            <div className="font-bold text-destructive">{brain.losses}</div>
+                            <div className="text-muted-foreground">Loss</div>
                           </div>
                         </div>
                         
-                        {/* Last Prediction */}
-                        {brain.predictions[0] && (
-                          <div className={cn(
-                            "p-2 rounded text-xs text-center",
-                            brain.predictions[0].result === "win" ? "bg-success/20 text-success" :
-                            brain.predictions[0].result === "loss" ? "bg-destructive/20 text-destructive" :
-                            "bg-warning/20 text-warning"
-                          )}>
-                            {brain.predictions[0].direction} - {brain.predictions[0].result === "pending" ? "..." : brain.predictions[0].result}
+                        <div className="mt-2">
+                          <div className="flex items-center justify-between text-xs mb-0.5">
+                            <span className="text-muted-foreground">Precisao</span>
+                            <span className="font-bold">{brain.accuracy.toFixed(1)}%</span>
                           </div>
-                        )}
+                          <Progress value={brain.accuracy} className="h-1" />
+                        </div>
                       </CardContent>
                     </Card>
                   ))}
+                  
+                  {evolutionBrains.length === 0 && (
+                    <div className="col-span-full text-center py-8 text-muted-foreground">
+                      Clique em Iniciar para comecar a evolucao
+                    </div>
+                  )}
                 </div>
-                
-                {brains.length === 0 && !isEvolutionMode && (
-                  <Card className="bg-card border-border">
-                    <CardContent className="flex flex-col items-center justify-center py-16">
-                      <Dna className="h-16 w-16 text-muted-foreground mb-4" />
-                      <h2 className="text-xl font-semibold text-foreground mb-2">Modo Evolucao</h2>
-                      <p className="text-muted-foreground text-center max-w-md">
-                        Clique em &quot;Iniciar Evolucao&quot; para criar 10 robos que vao competir e evoluir geneticamente
-                      </p>
-                    </CardContent>
-                  </Card>
-                )}
               </TabsContent>
             </Tabs>
           </>
