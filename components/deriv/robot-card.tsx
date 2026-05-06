@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -22,6 +22,7 @@ import {
 } from "lucide-react"
 import type { RobotStrategy, RobotConfig, RobotState, Operation, OperationMode } from "@/app/robots/page"
 import type { DerivAsset } from "@/contexts/deriv-context"
+import { useRobotLogs } from "@/contexts/robot-logs-context"
 
 interface RobotCardProps {
   strategy: RobotStrategy
@@ -46,12 +47,24 @@ export function RobotCard({
   onReset,
   onConfigure,
 }: RobotCardProps) {
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(true)
+  const { entries: logEntries } = useRobotLogs()
+  const logScrollRef = useRef<HTMLDivElement>(null)
   const Icon = strategy.icon
 
-  const winRate = state && state.totalEntries > 0
-    ? ((state.wins / state.totalEntries) * 100).toFixed(1)
-    : "0.0"
+  const robotLogs = useMemo(
+    () => logEntries.filter((e) => e.robotId === strategy.id),
+    [logEntries, strategy.id]
+  )
+
+  useEffect(() => {
+    const el = logScrollRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [robotLogs.length])
+
+  const closed = (state?.wins ?? 0) + (state?.losses ?? 0)
+  const winRate = state && closed > 0 ? ((state.wins / closed) * 100).toFixed(1) : "0.0"
 
   const assetName = assets.find((a) => a.symbol === config.asset)?.display_name || config.asset
 
@@ -213,13 +226,64 @@ export function RobotCard({
         )}
       </div>
 
+      {/* Strategy log (same tab) */}
+      <div className="border-b border-border px-3 py-2 bg-muted/20">
+        <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">
+          Log da estratégia
+        </p>
+        <div
+          ref={logScrollRef}
+          className="h-28 overflow-y-auto rounded-md border border-border/60 bg-background/80 px-2 py-1 font-mono text-[10px] leading-relaxed"
+        >
+          {robotLogs.length === 0 ? (
+            <span className="text-muted-foreground">Sem mensagens ainda — inicie o robô.</span>
+          ) : (
+            robotLogs.slice(-60).map((e) => (
+              <div key={e.id} className="break-words border-b border-border/30 py-0.5 last:border-0">
+                <span className="text-muted-foreground">
+                  {new Date(e.t).toLocaleTimeString("pt-BR", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })}
+                </span>{" "}
+                <span
+                  className={
+                    e.level === "error"
+                      ? "text-destructive"
+                      : e.level === "warn"
+                        ? "text-amber-600 dark:text-amber-400"
+                        : e.level === "tick"
+                          ? "text-muted-foreground"
+                          : "text-foreground"
+                  }
+                >
+                  [{e.level}]
+                </span>{" "}
+                <span className="text-foreground/90">{e.message}</span>
+                {e.detail ? (
+                  <pre className="mt-0.5 max-h-16 overflow-y-auto whitespace-pre-wrap text-[9px] text-muted-foreground">
+                    {e.detail}
+                  </pre>
+                ) : null}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
       {/* Operations List (Expandable) */}
       <div className="border-b border-border">
         <button
           onClick={() => setExpanded(!expanded)}
           className="w-full p-3 flex items-center justify-between text-sm text-muted-foreground hover:bg-secondary/50 transition-colors"
         >
-          <span>Operacoes ({state?.operations.length || 0})</span>
+          <span>
+            Operacoes ({state?.operations.length || 0})
+            {state != null && state.operations.length > 0
+              ? ` · ${state.operations.filter((o) => o.result === "win" || o.result === "loss").length} fechadas`
+              : ""}
+          </span>
           {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
         </button>
 
@@ -315,7 +379,7 @@ function OperationRow({ operation }: { operation: Operation }) {
         <span className="text-muted-foreground">{operation.stake.toFixed(2)} USD</span>
         {operation.result === "pending" ? (
           <Badge variant="secondary" className="text-[10px]">
-            Pendente
+            {operation.contractId != null ? `#${operation.contractId} ` : ""}Pendente
           </Badge>
         ) : (
           <span

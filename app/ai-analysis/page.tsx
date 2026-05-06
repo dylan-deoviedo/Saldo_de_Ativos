@@ -1,8 +1,8 @@
 "use client"
+/* Shell da página: só app/layout.tsx usa AppLayout (evitar duplicar aqui). */
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { useDerivContext, type TickData, type OHLCCandle } from "@/contexts/deriv-context"
-import { AppLayout } from "@/components/deriv/app-layout"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -291,9 +291,21 @@ export default function AIAnalysisPage() {
   const simpleNNRef = useRef<NeuralNetwork>(new NeuralNetwork())
   const pendingCandleRef = useRef<{ open: number; time: number } | null>(null)
   
-  const syntheticAssets = assets.filter(
-    (asset) => asset.market === "synthetic_index" || asset.submarket === "random_index"
-  )
+  const syntheticAssets = useMemo(() => {
+    const isSynthetic = (asset: (typeof assets)[0]) => {
+      const m = (asset.market || "").toLowerCase()
+      const sm = (asset.submarket || "").toLowerCase()
+      const sym = asset.symbol || ""
+      if (m === "synthetic_index" || sm === "random_index") return true
+      if (m.includes("synthetic") || sm.includes("random")) return true
+      if (sm.includes("smart_indices") || sm.includes("jump_index")) return true
+      if (/^R_\d/.test(sym)) return true
+      if (/^(1HZ|BOOM|CRASH|stpRNG|stp)/i.test(sym)) return true
+      return false
+    }
+    const syn = assets.filter(isSynthetic)
+    return syn.length > 0 ? syn : assets
+  }, [assets])
   
   // Calculate trend
   const calculateTrend = useCallback((candles: OHLCCandle[]): TrendAnalysis => {
@@ -822,8 +834,7 @@ export default function AIAnalysisPage() {
   const selectedAssetInfo = assets.find(a => a.symbol === selectedAsset)
   
   return (
-    <AppLayout>
-      <div className="space-y-6 p-4 md:p-6">
+    <div className="space-y-6 p-4 md:p-6">
         {/* Header */}
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
@@ -1478,7 +1489,6 @@ export default function AIAnalysisPage() {
             </Tabs>
           </>
         )}
-      </div>
-    </AppLayout>
+    </div>
   )
 }

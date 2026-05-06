@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { DerivProvider } from '@/contexts/deriv-context'
+import { RobotLogsProvider } from '@/contexts/robot-logs-context'
 import { AppLayout } from '@/components/deriv/app-layout'
 import './globals.css'
 
@@ -40,9 +41,11 @@ export default function RootLayout({
     <html lang="pt-BR" className="bg-background">
       <body className="font-sans antialiased">
         <DerivProvider>
-          <AppLayout>
-            {children}
-          </AppLayout>
+          <RobotLogsProvider>
+            <AppLayout>
+              {children}
+            </AppLayout>
+          </RobotLogsProvider>
         </DerivProvider>
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
