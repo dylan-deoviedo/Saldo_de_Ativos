@@ -28,6 +28,13 @@ import {
   type LucideIcon,
 } from "lucide-react"
 import { apiAnalyzeTeste } from "@/lib/deriv-api"
+import {
+  type OhlcBar,
+  describeReversalEfraimDebug,
+  REVERSAL_HUNTER_ID,
+  signalReversalValueChartEfraim,
+  signalTrendFollower,
+} from "@/lib/robot-strategies"
 
 export interface RobotStrategy {
   id: string
@@ -88,7 +95,8 @@ const strategies: RobotStrategy[] = [
   {
     id: "trend-follower",
     name: "Seguidor de Tendencia",
-    description: "Opera na direcao da tendencia usando medias moveis e momentum",
+    description:
+      "Deterministico: EMA12/EMA26 + confirmacao EMA3/EMA7 no TF da configuracao",
     type: "trend",
     icon: TrendingUp,
     color: "text-primary",
@@ -96,7 +104,8 @@ const strategies: RobotStrategy[] = [
   {
     id: "reversal-hunter",
     name: "Cacador de Reversao",
-    description: "Identifica pontos de reversao usando RSI e suporte/resistencia",
+    description:
+      "Deterministico: ValueChart Efraim (len 14); entrada na linha ±8 (vhigh/vlow) no TF da config",
     type: "reversal",
     icon: TrendingDown,
     color: "text-chart-2",
@@ -104,7 +113,7 @@ const strategies: RobotStrategy[] = [
   {
     id: "smart-martingale",
     name: "Martingale Inteligente",
-    description: "Martingale com filtros de entrada para evitar sequencias ruins",
+    description: "Mesma logica de tendencia (EMA12/26 + EMA3/7); gale ate max, depois repete ultimo gale",
     type: "martingale",
     icon: Target,
     color: "text-chart-3",
@@ -112,7 +121,7 @@ const strategies: RobotStrategy[] = [
   {
     id: "quick-scalper",
     name: "Scalper Rapido",
-    description: "Operacoes rapidas de 1-5 minutos em alta volatilidade",
+    description: "Mesma logica de tendencia (EMA12/26 + EMA3/7) no TF configurado",
     type: "scalping",
     icon: Activity,
     color: "text-chart-5",
@@ -120,7 +129,7 @@ const strategies: RobotStrategy[] = [
   {
     id: "grid-master",
     name: "Grid Master",
-    description: "Estrategia de grid trading para mercados laterais",
+    description: "Mesma logica de tendencia (EMA12/26 + EMA3/7) no TF configurado",
     type: "grid",
     icon: Bot,
     color: "text-chart-4",
@@ -162,6 +171,8 @@ function normContractId(id: number | string | undefined | null): number {
 
 const TESTE_ANALYSIS_INTERVAL_MS = 14_000
 const TESTE_MIN_CONFIDENCE = 0.52
+/** Intervalo entre analises tecnicas locais (tendencia / reversao). */
+const TECH_ANALYSIS_INTERVAL_MS = 8_000
 
 /** Granularidade das velas pedidas à Deriv (segundos), alinhada à duração configurada no robô. */
 function chartGranularitySeconds(config: RobotConfig): number {
@@ -212,6 +223,38 @@ function ticksToCandles(
     }))
 }
 
+function closesFromHistory(
+  hist: Array<{ time: number; open?: number; high?: number; low?: number; close?: number; price?: number }>,
+  gran: number
+): number[] {
+  return ohlcFromHistory(hist, gran).map((c) => c.close)
+}
+
+function ohlcFromHistory(
+  hist: Array<{ time: number; open?: number; high?: number; low?: number; close?: number; price?: number }>,
+  gran: number
+): OhlcBar[] {
+  if (hist.length === 0) return []
+  const h0 = hist[0]
+  if (typeof h0.open === "number" && typeof h0.close === "number") {
+    return (hist as Array<{ open: number; high: number; low: number; close: number }>).map((c) => ({
+      open: Number(c.open),
+      high: Number(c.high),
+      low: Number(c.low),
+      close: Number(c.close),
+    }))
+  }
+  if (typeof h0.price === "number") {
+    return ticksToCandles(hist as Array<{ time: number; price: number }>, gran).map((c) => ({
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    }))
+  }
+  return []
+}
+
 function buildProposalDuration(config: RobotConfig) {
   let durationSeconds = config.duration
   if (config.durationType === "m") durationSeconds = config.duration * 60
@@ -252,7 +295,6 @@ export default function RobotsPage() {
 
   const lastTickLogRef = useRef<Record<string, number>>({})
   const lastWaitPendingLogRef = useRef<Record<string, number>>({})
-  const lastNoSignalLogRef = useRef<Record<string, number>>({})
   const lastOpenContractLogRef = useRef<Map<number, number>>(new Map())
 
   const [robotStates, setRobotStates] = useState<Record<string, RobotState>>(() => {
@@ -302,6 +344,8 @@ export default function RobotsPage() {
   refreshDataRef.current = refreshData
   const lastTesteAnalysisRef = useRef<Record<string, number>>({})
   const testeAnalysisBusyRef = useRef<Record<string, boolean>>({})
+  const lastTechAnalysisRef = useRef<Record<string, number>>({})
+  const techAnalysisBusyRef = useRef<Record<string, boolean>>({})
   const queueRobotTradeRef = useRef<
     (robotId: string, signal: "CALL" | "PUT", price: number, detail: string) => void
   >(() => {})
@@ -621,7 +665,9 @@ export default function RobotsPage() {
               profit: state.profit + profit,
               currentMartingaleLevel: isWin
                 ? 0
-                : Math.min(state.currentMartingaleLevel + 1, config.maxMartingale),
+                : state.currentMartingaleLevel >= config.maxMartingale
+                  ? config.maxMartingale
+                  : state.currentMartingaleLevel + 1,
               operations: updatedOperations,
             },
           }
@@ -716,6 +762,7 @@ export default function RobotsPage() {
   const stopRobot = useCallback((robotId: string) => {
     tradeInFlightRef.current[robotId] = false
     testeAnalysisBusyRef.current[robotId] = false
+    techAnalysisBusyRef.current[robotId] = false
     pendingBuyQueueRef.current = pendingBuyQueueRef.current.filter((x) => x.robotId !== robotId)
     setRobotStates((prev) => ({
       ...prev,
@@ -735,7 +782,9 @@ export default function RobotsPage() {
   const resetRobot = useCallback((robotId: string) => {
     tradeInFlightRef.current[robotId] = false
     testeAnalysisBusyRef.current[robotId] = false
+    techAnalysisBusyRef.current[robotId] = false
     delete lastTesteAnalysisRef.current[robotId]
+    delete lastTechAnalysisRef.current[robotId]
     for (const [opId, meta] of [...pendingOpDetailsRef.current.entries()]) {
       if (meta.robotId === robotId) pendingOpDetailsRef.current.delete(opId)
     }
@@ -916,98 +965,62 @@ export default function RobotsPage() {
           return prev
         }
 
-        const roll = Math.random()
-        if (roll > 0.95) {
-          const signal: "CALL" | "PUT" = generateSignal(robotId, price)
-          const martingaleMultiplier = Math.pow(config.martingale, state.currentMartingaleLevel)
-          const stake = config.stake * martingaleMultiplier
-
-          const newOperation: Operation = {
-            id: `${robotId}-${Date.now()}`,
-            time: new Date(),
-            type: signal,
-            entry: price,
-            stake,
-            result: "pending",
-            martingaleLevel: state.currentMartingaleLevel,
-            duration: config.duration,
-          }
-
-          tradeInFlightRef.current[robotId] = true
-          pendingOpDetailsRef.current.set(newOperation.id, { robotId, operation: newOperation })
-
-          queueMicrotask(() => {
-            pushLogRef.current({
-              robotId,
-              level: "info",
-              message: `Sinal sorteado (5%): ${signal} entrada=${price} stake=${stake}`,
-            })
-            void executeDerivOrder(robotId, newOperation.id, signal, stake, config)
-          })
-
-          return {
-            ...prev,
-            [robotId]: {
-              ...state,
-              totalEntries: state.totalEntries + 1,
-              operations: [...state.operations.slice(-49), newOperation],
-              lastOperation: newOperation,
-            },
-          }
+        const nowTech = Date.now()
+        if (nowTech - (lastTechAnalysisRef.current[robotId] ?? 0) < TECH_ANALYSIS_INTERVAL_MS) {
+          return prev
         }
-
-        const nr = Date.now()
-        const lr = lastNoSignalLogRef.current[robotId] || 0
-        if (nr - lr >= 10_000) {
-          lastNoSignalLogRef.current[robotId] = nr
-          queueMicrotask(() =>
-            pushLogRef.current({
-              robotId,
-              level: "tick",
-              message: `Aguardando sorteio de entrada (~5% por tick). Último preço=${price}`,
-            })
-          )
+        if (techAnalysisBusyRef.current[robotId]) {
+          return prev
         }
+        techAnalysisBusyRef.current[robotId] = true
+        lastTechAnalysisRef.current[robotId] = nowTech
+        const priceSnap = price
+        const useReversal = robotId === REVERSAL_HUNTER_ID
+        queueMicrotask(() => {
+          void (async () => {
+            try {
+              refreshDataRef.current()
+              const cfg = robotConfigsRef.current[robotId]
+              if (!cfg) return
+              const gran = chartGranularitySeconds(cfg)
+              const hist = await getTicksHistoryRef.current(cfg.asset, 150, gran, false)
+              const ohlc = ohlcFromHistory(hist, gran)
+              const closes = ohlc.map((c) => c.close)
+              const sig = useReversal
+                ? signalReversalValueChartEfraim(ohlc)
+                : signalTrendFollower(closes)
+              const dbg = useReversal
+                ? describeReversalEfraimDebug(ohlc)
+                : `EMA12/26+3/7 tf=${gran}s fechos=${closes.length}`
+              pushLogRef.current({
+                robotId,
+                level: "info",
+                message: `${useReversal ? "Reversão" : "Tendência"}: ${sig} — ${dbg}`,
+              })
+              if (sig === "HOLD") return
+              queueRobotTradeRef.current(robotId, sig, priceSnap, dbg.slice(0, 220))
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err)
+              pushLogRef.current({
+                robotId,
+                level: "error",
+                message: `Análise técnica falhou: ${msg}`,
+              })
+            } finally {
+              techAnalysisBusyRef.current[robotId] = false
+            }
+          })()
+        })
 
         return prev
       })
     },
-    [robotConfigs, stopRobot, executeDerivOrder]
+    [robotConfigs, stopRobot]
   )
 
   useEffect(() => {
     processSignalRef.current = processSignal
   }, [processSignal])
-
-  // Generate signal based on strategy
-  const generateSignal = (robotId: string, price: number): "CALL" | "PUT" => {
-    const strategy = strategies.find((s) => s.id === robotId)
-    if (!strategy) return Math.random() > 0.5 ? "CALL" : "PUT"
-
-    // Simple signal generation based on strategy type
-    // In a real implementation, this would use actual technical indicators
-    switch (strategy.type) {
-      case "trend":
-        // Trend follower - follow the momentum
-        return Math.random() > 0.5 ? "CALL" : "PUT"
-      case "reversal":
-        // Reversal - counter trend
-        return Math.random() > 0.5 ? "PUT" : "CALL"
-      case "martingale":
-        // Martingale - alternate direction
-        return Math.random() > 0.5 ? "CALL" : "PUT"
-      case "scalping":
-        // Scalper - quick decisions
-        return Math.random() > 0.5 ? "CALL" : "PUT"
-      case "grid":
-        // Grid - based on price levels
-        return Math.random() > 0.5 ? "CALL" : "PUT"
-      case "teste":
-        return Math.random() > 0.5 ? "CALL" : "PUT"
-      default:
-        return Math.random() > 0.5 ? "CALL" : "PUT"
-    }
-  }
 
   // Cleanup on unmount
   useEffect(() => {
